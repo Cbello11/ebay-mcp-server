@@ -364,7 +364,7 @@ export function registerOrderTools(server: McpServer): void {
         const cfg = getConfig();
         const xml = await tradingRequest(cfg, 'GetFeedback', `
   <DetailLevel>ReturnAll</DetailLevel>
-  <FeedbackType>${args.type}</FeedbackType>
+  <FeedbackType>${xmlEscape(args.type)}</FeedbackType>
   <Pagination>
     <EntriesPerPage>${args.limit}</EntriesPerPage>
     <PageNumber>1</PageNumber>

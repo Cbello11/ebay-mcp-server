@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 *.log
+vitest.config.js
+vitest.config.js.map
+vitest.config.d.ts

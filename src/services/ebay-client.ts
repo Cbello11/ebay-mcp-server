@@ -130,11 +130,21 @@ export async function tradingRequest(
 
 // ─── XML helpers ──────────────────────────────────────────────────────────────
 
+// Tags that can appear multiple times as siblings in eBay XML responses.
+const REPEATING_TAGS = new Set([
+  'LongMessage', 'ShortMessage', 'SuggestedCategory', 'ItemType',
+  'Order', 'Transaction', 'FeedbackDetail', 'PaymentMethods',
+  'ShippingServiceOptions', 'PictureURL',
+]);
+
 const _parser = new XMLParser({
-  ignoreAttributes:   false,
-  cdataPropName:      '__cdata',
-  isArray:            () => false,
-  parseTagValue:      true,
+  ignoreAttributes:    false,
+  cdataPropName:       '__cdata',
+  isArray:             (_name, _jpath, _isLeaf, isAttribute) => {
+    if (isAttribute) return false;
+    return REPEATING_TAGS.has(_name);
+  },
+  parseTagValue:       true,
   parseAttributeValue: false,
 });
 

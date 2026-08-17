@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { AxiosError } from 'axios';
 import { xmlVal, xmlAll, checkTradingAck, xmlEscape, formatError } from './services/ebay-client.js';
 
 // ─── xmlEscape ────────────────────────────────────────────────────────────────
@@ -100,8 +101,6 @@ describe('checkTradingAck', () => {
 });
 
 // ─── formatError ─────────────────────────────────────────────────────────────
-
-import { AxiosError } from 'axios';
 
 describe('formatError', () => {
   it('handles a plain Error', () => {
