@@ -3,6 +3,7 @@
  */
 
 import axios, { AxiosError } from 'axios';
+import { XMLParser } from 'fast-xml-parser';
 import { EBAY_API_VERSION, EBAY_SITE_ID, EBAY_PROD, EBAY_SANDBOX as EBAY_SANDBOX_URLS } from '../constants.js';
 import type { EbayConfig } from '../types.js';
 
@@ -129,26 +130,93 @@ export async function tradingRequest(
 
 // ─── XML helpers ──────────────────────────────────────────────────────────────
 
-export function xmlVal(xml: string, tag: string): string {
-  const m = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
-  return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/, '$1').trim() : '';
+const _parser = new XMLParser({
+  ignoreAttributes:   false,
+  cdataPropName:      '__cdata',
+  isArray:            () => false,
+  parseTagValue:      true,
+  parseAttributeValue: false,
+});
+
+function _parse(xml: string): Record<string, unknown> {
+  try {
+    return _parser.parse(xml) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
-export function xmlAll(xml: string, tag: string): string[] {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'g');
-  const results: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null) {
-    results.push(m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/, '$1').trim());
+function _findFirst(obj: unknown, tag: string): unknown {
+  if (typeof obj !== 'object' || obj === null) return undefined;
+  const rec = obj as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(rec, tag)) return rec[tag];
+  for (const val of Object.values(rec)) {
+    const found = _findFirst(val, tag);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function _findAll(obj: unknown, tag: string, results: string[] = []): string[] {
+  if (typeof obj !== 'object' || obj === null) return results;
+  const rec = obj as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(rec, tag)) {
+    const val = rec[tag];
+    const items = Array.isArray(val) ? val : [val];
+    for (const item of items) {
+      if (typeof item === 'object' && item !== null && '__cdata' in (item as Record<string, unknown>)) {
+        results.push(String((item as Record<string, unknown>)['__cdata'] ?? '').trim());
+      } else {
+        results.push(String(item ?? '').trim());
+      }
+    }
+  }
+  for (const [key, val] of Object.entries(rec)) {
+    if (key !== tag) _findAll(val, tag, results);
   }
   return results;
 }
 
+function _scalar(val: unknown): string {
+  if (typeof val === 'object' && val !== null && '__cdata' in (val as Record<string, unknown>)) {
+    return String((val as Record<string, unknown>)['__cdata'] ?? '').trim();
+  }
+  return String(val ?? '').trim();
+}
+
+export function xmlVal(xml: string, tag: string): string {
+  const parsed = _parse(xml);
+  const val = _findFirst(parsed, tag);
+  if (val === undefined) return '';
+  if (Array.isArray(val)) return _scalar(val[0]);
+  return _scalar(val);
+}
+
+export function xmlAll(xml: string, tag: string): string[] {
+  const parsed = _parse(xml);
+  return _findAll(parsed, tag);
+}
+
 export function checkTradingAck(xml: string): void {
-  if (xml.includes('<Ack>Failure</Ack>')) {
-    const msgs = xmlAll(xml, 'LongMessage');
+  const parsed = _parse(xml);
+  const ack = _scalar(_findFirst(parsed, 'Ack'));
+  if (ack === 'Failure') {
+    const msgs = _findAll(parsed, 'LongMessage');
     throw new Error(msgs.join('; ') || 'eBay Trading API returned Failure');
   }
+}
+
+/**
+ * Escapes a string for safe interpolation into an XML text node.
+ * Prevents XML injection from user-supplied values.
+ */
+export function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 // ─── Error formatting ─────────────────────────────────────────────────────────

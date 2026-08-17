@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { sellRequest, tradingRequest, xmlVal, xmlAll, checkTradingAck, getConfig, formatError } from '../services/ebay-client.js';
+import { sellRequest, tradingRequest, xmlVal, xmlAll, checkTradingAck, getConfig, formatError, xmlEscape } from '../services/ebay-client.js';
 import { CHARACTER_LIMIT, DEFAULT_LIMIT } from '../constants.js';
 import type { OrderSummary, PaginatedResult } from '../types.js';
 
@@ -207,6 +207,7 @@ export function registerOrderTools(server: McpServer): void {
       inputSchema: z.object({
         order_id:         z.string().min(1).describe('eBay order ID'),
         line_item_id:     z.string().min(1).describe('Line item ID within the order (from ebay_get_order)'),
+        quantity:         z.number().int().positive().default(1).describe('Quantity shipped (default 1)'),
         tracking_number:  z.string().min(1).describe('Carrier tracking number'),
         carrier_code:     z.enum([
           'USPS','UPS','FedEx','DHL','OnTrac','LaserShip','SEKO','Lasership',
@@ -225,7 +226,7 @@ export function registerOrderTools(server: McpServer): void {
         const body = {
           lineItems: [{
             lineItemId: args.line_item_id,
-            quantity:   1,
+            quantity:   args.quantity,
           }],
           shippingCarrierCode: args.carrier_code,
           trackingNumber:      args.tracking_number,
@@ -242,6 +243,7 @@ export function registerOrderTools(server: McpServer): void {
           + `- **Order ID:** \`${args.order_id}\`\n`
           + `- **Tracking:** ${args.tracking_number}\n`
           + `- **Carrier:** ${args.carrier_code}\n`
+          + `- **Quantity Shipped:** ${args.quantity}\n`
           + `- **Shipped Date:** ${shippedDate}\n\n`
           + `The buyer has been notified automatically.`;
 
@@ -292,6 +294,138 @@ export function registerOrderTools(server: McpServer): void {
         md += `- **Unsold:** ${unsoldCount}\n`;
 
         return { content: [{ type: 'text', text: md }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: formatError(e) }], isError: true };
+      }
+    }
+  );
+
+  // ── ebay_cancel_order ──────────────────────────────────────────────────────
+  server.registerTool(
+    'ebay_cancel_order',
+    {
+      title:       'Cancel eBay Order',
+      description: 'Cancel an eBay order and optionally refund the buyer. Uses the Post-Order Cancellation API.',
+      inputSchema: z.object({
+        order_id:        z.string().min(1).describe('eBay order ID to cancel'),
+        cancel_reason:   z.enum([
+          'BUYER_ASKED_CANCEL',
+          'ITEM_NOT_AVAILABLE',
+          'ADDRESS_ISSUES',
+          'CUSTOM_CODE',
+        ]).describe('Reason for cancellation'),
+        buyer_username:  z.string().optional().describe('Buyer username — required for BUYER_ASKED_CANCEL reason'),
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async (args) => {
+      try {
+        const cfg = getConfig();
+
+        const body: Record<string, unknown> = {
+          cancelReason: args.cancel_reason,
+          legacyOrderId: args.order_id,
+        };
+        if (args.buyer_username) body.buyerUsername = args.buyer_username;
+
+        await sellRequest(
+          cfg, 'POST',
+          '/post-order/v2/cancellation',
+          body,
+        );
+
+        let md = `## ✅ Order Cancellation Submitted\n\n`;
+        md += `- **Order ID:** \`${args.order_id}\`\n`;
+        md += `- **Reason:** ${args.cancel_reason}\n\n`;
+        md += `eBay will notify the buyer. Refund (if applicable) will be processed automatically.`;
+
+        return { content: [{ type: 'text', text: md }] };
+      } catch (e) {
+        return { content: [{ type: 'text', text: formatError(e) }], isError: true };
+      }
+    }
+  );
+
+  // ── ebay_get_feedback ──────────────────────────────────────────────────────
+  server.registerTool(
+    'ebay_get_feedback',
+    {
+      title:       'Get eBay Feedback',
+      description: 'Retrieve feedback left for your seller account. Returns feedback score, percentage, and recent comments.',
+      inputSchema: z.object({
+        limit:  z.number().int().min(1).max(25).default(10).describe('Number of feedback entries to return (default 10, max 25)'),
+        type:   z.enum(['FeedbackReceived','FeedbackLeft','FeedbackReceivedAsSeller']).default('FeedbackReceivedAsSeller').describe('Feedback type to retrieve'),
+        format: z.enum(['markdown','json']).default('markdown').describe('Output format'),
+      }).strict(),
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      try {
+        const cfg = getConfig();
+        const xml = await tradingRequest(cfg, 'GetFeedback', `
+  <DetailLevel>ReturnAll</DetailLevel>
+  <FeedbackType>${args.type}</FeedbackType>
+  <Pagination>
+    <EntriesPerPage>${args.limit}</EntriesPerPage>
+    <PageNumber>1</PageNumber>
+  </Pagination>
+`);
+        checkTradingAck(xml);
+
+        const score      = xmlVal(xml, 'FeedbackScore');
+        const percent    = xmlVal(xml, 'PositiveFeedbackPercent');
+        const totalPos   = xmlVal(xml, 'TotalPositiveFeedbackEntries');
+        const totalNeg   = xmlVal(xml, 'TotalNegativeFeedbackEntries');
+        const totalNeu   = xmlVal(xml, 'TotalNeutralFeedbackEntries');
+
+        // Collect feedback entries
+        interface FeedbackEntry {
+          role: string; rating: string; comment: string; item: string; date: string;
+        }
+        const entries: FeedbackEntry[] = [];
+        const commentingUsers  = xmlAll(xml, 'CommentingUser');
+        const commentTypes     = xmlAll(xml, 'CommentType');
+        const commentTexts     = xmlAll(xml, 'CommentText');
+        const itemIds          = xmlAll(xml, 'ItemID');
+        const commentDates     = xmlAll(xml, 'CommentTime');
+
+        for (let i = 0; i < commentingUsers.length && i < args.limit; i++) {
+          entries.push({
+            role:    commentingUsers[i] ?? '',
+            rating:  commentTypes[i]    ?? '',
+            comment: commentTexts[i]    ?? '',
+            item:    itemIds[i]         ?? '',
+            date:    commentDates[i]    ?? '',
+          });
+        }
+
+        if (args.format === 'json') {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ score, percent, totalPos, totalNeg, totalNeu, entries }, null, 2),
+            }],
+          };
+        }
+
+        let md = `## eBay Seller Feedback\n\n`;
+        md += `- **Feedback Score:** ${score || 'N/A'}\n`;
+        md += `- **Positive:** ${percent || 'N/A'}%\n`;
+        md += `- **Positives:** ${totalPos || '0'}  |  **Negatives:** ${totalNeg || '0'}  |  **Neutrals:** ${totalNeu || '0'}\n\n`;
+
+        if (entries.length) {
+          md += `### Recent Feedback (${args.type})\n\n`;
+          for (const e of entries) {
+            const emoji = e.rating === 'Positive' ? '✅' : e.rating === 'Negative' ? '❌' : '➖';
+            md += `${emoji} **${e.rating}** — Item \`${e.item}\` — ${e.date}\n`;
+            if (e.comment) md += `> ${e.comment}\n`;
+            md += '\n';
+          }
+        } else {
+          md += '_No feedback entries found._\n';
+        }
+
+        return { content: [{ type: 'text', text: md.slice(0, CHARACTER_LIMIT) }] };
       } catch (e) {
         return { content: [{ type: 'text', text: formatError(e) }], isError: true };
       }

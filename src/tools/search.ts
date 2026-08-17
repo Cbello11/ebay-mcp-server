@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { browseGet, tradingRequest, xmlAll, xmlVal, checkTradingAck, getConfig, formatError } from '../services/ebay-client.js';
+import { browseGet, tradingRequest, xmlAll, xmlVal, checkTradingAck, getConfig, formatError, xmlEscape } from '../services/ebay-client.js';
 import { CHARACTER_LIMIT, DEFAULT_LIMIT, MAX_LIMIT, CONDITION_NAMES } from '../constants.js';
 import type { SearchItem, PaginatedResult } from '../types.js';
 
@@ -153,7 +153,7 @@ export function registerSearchTools(server: McpServer): void {
     async (args) => {
       try {
         const cfg = getConfig();
-        const xml = await tradingRequest(cfg, 'GetSuggestedCategories', `<Query>${args.query}</Query>`);
+        const xml = await tradingRequest(cfg, 'GetSuggestedCategories', `<Query>${xmlEscape(args.query)}</Query>`);
         checkTradingAck(xml);
 
         // Parse <SuggestedCategoryArray><SuggestedCategory>...</SuggestedCategory>...

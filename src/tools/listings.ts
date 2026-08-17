@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   tradingRequest, xmlVal, xmlAll, checkTradingAck,
-  getConfig, formatError,
+  getConfig, formatError, xmlEscape,
 } from '../services/ebay-client.js';
 import { CHARACTER_LIMIT, DEFAULT_LIMIT, CONDITION_NAMES } from '../constants.js';
 import type { ListingSummary, PaginatedResult } from '../types.js';
@@ -111,7 +111,7 @@ export function registerListingTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const xml = await tradingRequest(cfg, 'GetItem', `
-  <ItemID>${args.item_id}</ItemID>
+  <ItemID>${xmlEscape(args.item_id)}</ItemID>
   <DetailLevel>ReturnAll</DetailLevel>
 `);
         checkTradingAck(xml);
@@ -201,11 +201,11 @@ export function registerListingTools(server: McpServer): void {
         const cfg = getConfig();
 
         const pictures = args.picture_urls?.length
-          ? `<PictureDetails>${args.picture_urls.map(u => `<PictureURL>${u}</PictureURL>`).join('')}</PictureDetails>`
+          ? `<PictureDetails>${args.picture_urls.map(u => `<PictureURL>${xmlEscape(u)}</PictureURL>`).join('')}</PictureDetails>`
           : '';
 
-        const paymentXml = args.payment_methods.map(m => `<PaymentMethods>${m}</PaymentMethods>`).join('');
-        const paypalXml  = args.paypal_email ? `<PayPalEmailAddress>${args.paypal_email}</PayPalEmailAddress>` : '';
+        const paymentXml = args.payment_methods.map(m => `<PaymentMethods>${xmlEscape(m)}</PaymentMethods>`).join('');
+        const paypalXml  = args.paypal_email ? `<PayPalEmailAddress>${xmlEscape(args.paypal_email)}</PayPalEmailAddress>` : '';
 
         const buyNowXml = (args.listing_type === 'Chinese' && args.buy_it_now_price)
           ? `<BuyItNowPrice currencyID="USD">${args.buy_it_now_price.toFixed(2)}</BuyItNowPrice>`
@@ -217,13 +217,13 @@ export function registerListingTools(server: McpServer): void {
     ${args.returns_accepted ? `<ReturnsWithinOption>${args.return_period}</ReturnsWithinOption><ShippingCostPaidByOption>${args.return_shipping_paid_by}</ShippingCostPaidByOption>` : ''}
   </ReturnPolicy>`;
 
-        const postalXml = args.postal_code ? `<PostalCode>${args.postal_code}</PostalCode>` : '';
+        const postalXml = args.postal_code ? `<PostalCode>${xmlEscape(args.postal_code)}</PostalCode>` : '';
 
         const body = `
   <Item>
-    <Title>${args.title}</Title>
+    <Title>${xmlEscape(args.title)}</Title>
     <Description><![CDATA[${args.description}]]></Description>
-    <PrimaryCategory><CategoryID>${args.category_id}</CategoryID></PrimaryCategory>
+    <PrimaryCategory><CategoryID>${xmlEscape(args.category_id)}</CategoryID></PrimaryCategory>
     <StartPrice currencyID="USD">${args.start_price.toFixed(2)}</StartPrice>
     ${buyNowXml}
     <ConditionID>${args.condition_id}</ConditionID>
@@ -232,7 +232,7 @@ export function registerListingTools(server: McpServer): void {
     <DispatchTimeMax>3</DispatchTimeMax>
     <ListingDuration>${args.listing_duration}</ListingDuration>
     <ListingType>${args.listing_type}</ListingType>
-    <Location>${args.location}</Location>
+    <Location>${xmlEscape(args.location)}</Location>
     ${postalXml}
     <Quantity>${args.quantity}</Quantity>
     ${paymentXml}
@@ -240,7 +240,7 @@ export function registerListingTools(server: McpServer): void {
     <ShippingDetails>
       <ShippingServiceOptions>
         <ShippingServicePriority>1</ShippingServicePriority>
-        <ShippingService>${args.shipping_service}</ShippingService>
+        <ShippingService>${xmlEscape(args.shipping_service)}</ShippingService>
         <ShippingServiceCost currencyID="USD">${args.shipping_cost.toFixed(2)}</ShippingServiceCost>
       </ShippingServiceOptions>
     </ShippingDetails>
@@ -294,8 +294,8 @@ export function registerListingTools(server: McpServer): void {
       try {
         const cfg = getConfig();
 
-        const parts: string[] = [`<ItemID>${args.item_id}</ItemID>`];
-        if (args.title)       parts.push(`<Title>${args.title}</Title>`);
+        const parts: string[] = [`<ItemID>${xmlEscape(args.item_id)}</ItemID>`];
+        if (args.title)       parts.push(`<Title>${xmlEscape(args.title)}</Title>`);
         if (args.description) parts.push(`<Description><![CDATA[${args.description}]]></Description>`);
         if (args.price)       parts.push(`<StartPrice currencyID="USD">${args.price.toFixed(2)}</StartPrice>`);
         if (args.quantity)    parts.push(`<Quantity>${args.quantity}</Quantity>`);
@@ -309,7 +309,7 @@ export function registerListingTools(server: McpServer): void {
 </ShippingDetails>`);
         }
         if (args.picture_urls?.length) {
-          parts.push(`<PictureDetails>${args.picture_urls.map(u => `<PictureURL>${u}</PictureURL>`).join('')}</PictureDetails>`);
+          parts.push(`<PictureDetails>${args.picture_urls.map(u => `<PictureURL>${xmlEscape(u)}</PictureURL>`).join('')}</PictureDetails>`);
         }
 
         const xml = await tradingRequest(cfg, 'ReviseItem', `<Item>${parts.join('\n')}</Item>`);
@@ -352,7 +352,7 @@ export function registerListingTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const xml = await tradingRequest(cfg, 'EndItem', `
-  <ItemID>${args.item_id}</ItemID>
+  <ItemID>${xmlEscape(args.item_id)}</ItemID>
   <EndingReason>${args.reason}</EndingReason>
 `);
         checkTradingAck(xml);
