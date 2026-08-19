@@ -2,7 +2,7 @@
 aptPkgs = ["python3-pip"]
 
 [phases.install]
-cmds = ["pip3 install -r requirements.txt"]
+cmds = ["pip3 install -r requirements.txt --break-system-packages"]
 
 [phases.build]
 cmds = []
