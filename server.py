@@ -7,8 +7,6 @@ A FastMCP server providing full eBay seller control:
     smart relist detector, daily report, price optimizer
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import os
