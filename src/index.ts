@@ -28,18 +28,25 @@ for (const key of REQUIRED_ENV) {
 }
 
 // ─── MCP Server ───────────────────────────────────────────────────────────────
-const server = new McpServer({
-  name:    'ebay-mcp-server',
-  version: '2.0.0',
-});
+// A fresh McpServer + transport is created per request (see POST /mcp below).
+// McpServer.connect() throws if the same instance is connected to a second
+// transport, so a shared singleton cannot serve more than one request.
+function createServer(): McpServer {
+  const server = new McpServer({
+    name:    'ebay-mcp-server',
+    version: '2.0.0',
+  });
 
-registerSearchTools(server);
-registerListingTools(server);
-registerOrderTools(server);
-registerMessageTools(server);
-registerReturnTools(server);
-registerFeedbackTools(server);
-registerPolicyTools(server);
+  registerSearchTools(server);
+  registerListingTools(server);
+  registerOrderTools(server);
+  registerMessageTools(server);
+  registerReturnTools(server);
+  registerFeedbackTools(server);
+  registerPolicyTools(server);
+
+  return server;
+}
 
 // ─── Express App ──────────────────────────────────────────────────────────────
 const app = express();
@@ -64,13 +71,24 @@ app.get('/', (_req, res) => {
 
 app.post('/mcp', async (req, res) => {
   if (!checkAuth(req, res)) return;
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse:  true,
-  });
-  res.on('close', () => transport.close());
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  try {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse:  true,
+    });
+    res.on('close', () => {
+      transport.close();
+      server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error('[ebay-mcp] Error handling /mcp request:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
 });
 
 app.get('/mcp', (_req, res) => {
