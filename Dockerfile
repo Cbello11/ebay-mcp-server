@@ -3,8 +3,8 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm, pinned to the version in package.json's packageManager field
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 
 # Copy package manifests first for better layer caching
 COPY package.json pnpm-lock.yaml* ./
@@ -21,8 +21,8 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm, pinned to the version in package.json's packageManager field
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 
 # Copy package manifests
 COPY package.json pnpm-lock.yaml* ./
