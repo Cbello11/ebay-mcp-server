@@ -12,8 +12,10 @@ import type {
   endListingSchema,
   getActiveListingsSchema,
   getListingSchema,
+  getStoreCategoriesSchema,
   relistItemSchema,
   reviseListingSchema,
+  uploadPictureSchema,
 } from '@/utils/trading/trading.js';
 import { isRecord } from '@/utils/typeGuards.js';
 import { Effect } from 'effect';
@@ -31,6 +33,10 @@ type ReviseListingInput = InferEffectSchema<typeof reviseListingSchema>;
 type EndListingInput = InferEffectSchema<typeof endListingSchema>;
 /** Input accepted by relistItem. */
 type RelistItemInput = InferEffectSchema<typeof relistItemSchema>;
+/** Input accepted by uploadPicture. */
+type UploadPictureInput = InferEffectSchema<typeof uploadPictureSchema>;
+/** Input accepted by getStoreCategories. */
+type GetStoreCategoriesInput = InferEffectSchema<typeof getStoreCategoriesSchema>;
 
 const asRecordArray = (value: unknown): Record<string, unknown>[] => {
   if (!Array.isArray(value)) {
@@ -38,6 +44,19 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] => {
   }
 
   return value.filter(isRecord);
+};
+
+/**
+ * Drops the `Fees`/`DiscountReason` block eBay attaches to every listing
+ * mutation response. It's ~25 always-present line items (almost always all
+ * $0 for a standard fixed-price listing under the free-listing tier) that
+ * callers driving this API programmatically have no use for — pure token
+ * cost with zero information value. Every other field (Ack, Errors, ItemID,
+ * Timestamp, etc.) passes through unchanged.
+ */
+const stripFees = (result: TradingRecordResponse): TradingRecordResponse => {
+  const { Fees, DiscountReason, ...rest } = result;
+  return rest;
 };
 
 /**
@@ -123,6 +142,7 @@ export class TradingApi {
       const result = yield* tradingClient.execute('GetItem', {
         ItemID: itemId,
         DetailLevel: 'ReturnAll',
+        IncludeItemSpecifics: true,
       });
       const items = asRecordArray(result.Item);
 
@@ -154,15 +174,17 @@ export class TradingApi {
       const request = yield* requireObjectEffect<CreateListingInput>(input, 'input');
       const item = yield* requireObjectEffect<Record<string, unknown>>(request.item, 'item');
 
-      return yield* tradingClient.execute('AddFixedPriceItem', { Item: item });
+      return yield* tradingClient
+        .execute('AddFixedPriceItem', { Item: item })
+        .pipe(Effect.map(stripFees));
     });
   };
 
   /**
-   * Revises a fixed-price listing by merging changes with the eBay item ID.
+   * Revises a fixed-price or auction listing by merging changes with the eBay item ID.
    *
    * @param input - eBay item identifier plus Trading API Item fields to update.
-   * @returns An Effect that succeeds with the parsed ReviseFixedPriceItem response.
+   * @returns An Effect that succeeds with the parsed ReviseItem response.
    *
    * @example
    * ```ts
@@ -171,7 +193,7 @@ export class TradingApi {
    * );
    * ```
    *
-   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/ReviseFixedPriceItem.html
+   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/ReviseItem.html
    */
   reviseListing = (
     input: ReviseListingInput,
@@ -183,9 +205,12 @@ export class TradingApi {
       const itemId = yield* requireStringEffect(request.itemId, 'itemId');
       const fields = yield* requireObjectEffect<Record<string, unknown>>(request.fields, 'fields');
 
-      return yield* tradingClient.execute('ReviseFixedPriceItem', {
-        Item: { ...fields, ItemID: itemId },
-      });
+      // ReviseItem is the listing-type-agnostic call; ReviseFixedPriceItem
+      // rejects auction (Chinese) listings with "Unsupported ListingType" even
+      // for fields like Title that both listing types support.
+      return yield* tradingClient
+        .execute('ReviseItem', { Item: { ...fields, ItemID: itemId } })
+        .pipe(Effect.map(stripFees));
     });
   };
 
@@ -215,10 +240,9 @@ export class TradingApi {
       const inputReason = yield* optionalStringEffect(request.reason, 'reason');
       const reason = inputReason === undefined ? 'NotAvailable' : inputReason;
 
-      return yield* tradingClient.execute('EndFixedPriceItem', {
-        ItemID: itemId,
-        EndingReason: reason,
-      });
+      return yield* tradingClient
+        .execute('EndFixedPriceItem', { ItemID: itemId, EndingReason: reason })
+        .pipe(Effect.map(stripFees));
     });
   };
 
@@ -254,9 +278,72 @@ export class TradingApi {
         );
       }
 
-      return yield* tradingClient.execute('RelistFixedPriceItem', {
-        Item: { ...modifications, ItemID: itemId },
+      return yield* tradingClient
+        .execute('RelistFixedPriceItem', { Item: { ...modifications, ItemID: itemId } })
+        .pipe(Effect.map(stripFees));
+    });
+  };
+
+  /**
+   * Uploads a picture to eBay Picture Services (EPS) and returns a permanent
+   * eBay-hosted image URL for use in listing PictureDetails, instead of linking
+   * to a third-party image host.
+   *
+   * @param input - Base64-encoded image data, filename, and optional MIME type / picture name.
+   * @returns An Effect that succeeds with the parsed UploadSiteHostedPictures response payload.
+   *
+   * @example
+   * ```ts
+   * const result = await Effect.runPromise(
+   *   tradingApi.uploadPicture({ imageBase64: '...', filename: 'photo.jpg' }),
+   * );
+   * ```
+   *
+   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/UploadSiteHostedPictures.html
+   */
+  uploadPicture = (
+    input: UploadPictureInput,
+  ): Effect.Effect<TradingRecordResponse, EbayApiError | EndpointInputError> => {
+    const tradingClient = this.client;
+
+    return Effect.gen(function* () {
+      const request = yield* requireObjectEffect<UploadPictureInput>(input, 'input');
+      const imageBase64 = yield* requireStringEffect(request.imageBase64, 'imageBase64');
+      const filename = yield* requireStringEffect(request.filename, 'filename');
+      const inputContentType = yield* optionalStringEffect(request.contentType, 'contentType');
+      const pictureName = yield* optionalStringEffect(request.pictureName, 'pictureName');
+      const contentType = inputContentType === undefined ? 'image/jpeg' : inputContentType;
+      const imageBuffer = Buffer.from(imageBase64, 'base64');
+
+      return yield* tradingClient.executeUploadPicture({
+        imageBuffer,
+        filename,
+        contentType,
+        pictureName,
       });
     });
+  };
+
+  /**
+   * Fetches the seller's eBay Store custom category tree (the folders shown
+   * under "Store category" when listing/revising an item).
+   *
+   * @param input - No input fields; accepted for handler-signature consistency.
+   * @returns An Effect that succeeds with the parsed GetStore response payload,
+   * including Store.CustomCategories.CustomCategory (with nested ChildCategory).
+   *
+   * @example
+   * ```ts
+   * const result = await Effect.runPromise(tradingApi.getStoreCategories());
+   * ```
+   *
+   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/GetStore.html
+   */
+  getStoreCategories = (
+    _input: GetStoreCategoriesInput = {},
+  ): Effect.Effect<TradingRecordResponse, EbayApiError> => {
+    const tradingClient = this.client;
+
+    return tradingClient.execute('GetStore', { CategoryStructureOnly: true });
   };
 }

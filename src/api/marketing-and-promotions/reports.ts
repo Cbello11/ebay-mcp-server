@@ -15,7 +15,7 @@ import type {
   getReportTaskInputSchema,
   deleteReportTaskInputSchema,
 } from '@/schemas/marketing/marketing.js';
-import type { Effect } from 'effect';
+import { Effect } from 'effect';
 import type { InferEffectSchema } from '@/utils/effectSchemaTypes.js';
 import { MARKETING_BASE_PATH, type MarketingOperationResponse } from './shared.js';
 
@@ -84,8 +84,15 @@ export const createMarketingReportsMethods = (client: EbayApiClient) => ({
   /**
    * Get report through the eBay Marketing API.
    *
+   * eBay's `ad_report/{reportId}` endpoint doesn't always return JSON — some
+   * report/format combinations return plain text or TSV instead. Fetches the
+   * body as raw text and only parses it as JSON when it actually looks like
+   * JSON, so a non-JSON report body comes back as usable text instead of an
+   * unparseable crash.
+   *
    * @param input - Path, query, header, and request body values for getReport.
-   * @returns An Effect that succeeds with eBay's generated getReport response DTO.
+   * @returns An Effect that succeeds with eBay's parsed getReport response DTO,
+   * or `{ format: 'text', reportData: string }` when eBay's response isn't JSON.
    *
    * @example
    * ```ts
@@ -96,7 +103,19 @@ export const createMarketingReportsMethods = (client: EbayApiClient) => ({
    */
   getReport: (input: GetReportInput): Effect.Effect<GetReportResponse, EbayApiError> => {
     const path = `${MARKETING_BASE_PATH}/ad_report/${input.reportId}`;
-    return requestGetEffect<GetReportResponse>(client, path);
+    return requestGetEffect<string>(client, path, undefined, { responseType: 'text' }).pipe(
+      Effect.map((text) => {
+        const trimmed = typeof text === 'string' ? text.trim() : '';
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          try {
+            return JSON.parse(trimmed) as unknown as GetReportResponse;
+          } catch {
+            // Looked like JSON but didn't parse — fall through to raw text below.
+          }
+        }
+        return { format: 'text', reportData: text } as unknown as GetReportResponse;
+      }),
+    );
   },
 
   /**

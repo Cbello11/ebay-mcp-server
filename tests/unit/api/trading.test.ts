@@ -88,6 +88,7 @@ it('gets one listing by item ID', async () => {
   expect(mockClient.execute).toHaveBeenCalledWith('GetItem', {
     ItemID: '12345',
     DetailLevel: 'ReturnAll',
+    IncludeItemSpecifics: true,
   });
   expect(result.ItemID).toBe('12345');
 });
@@ -118,7 +119,7 @@ it('revises a fixed-price listing', async () => {
     api.reviseListing({ itemId: '12345', fields: { Quantity: 10 } }),
   );
 
-  expect(mockClient.execute).toHaveBeenCalledWith('ReviseFixedPriceItem', {
+  expect(mockClient.execute).toHaveBeenCalledWith('ReviseItem', {
     Item: { ItemID: '12345', Quantity: 10 },
   });
   expect(result.ItemID).toBe('12345');

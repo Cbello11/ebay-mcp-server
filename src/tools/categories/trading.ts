@@ -5,8 +5,10 @@ import {
   endListingSchema,
   getActiveListingsSchema,
   getListingSchema,
+  getStoreCategoriesSchema,
   relistItemSchema,
   reviseListingSchema,
+  uploadPictureSchema,
 } from '@/utils/trading/trading.js';
 import { Effect } from 'effect';
 
@@ -59,5 +61,21 @@ export const tradingEntries: ToolEntry[] = [
     inputSchema: relistItemSchema.shape,
     annotations: { readOnlyHint: false },
     handler: (api, args) => Effect.runPromise(api.trading.relistItem(args)),
+  }),
+  defineTool({
+    name: 'ebay_upload_site_hosted_picture',
+    description:
+      'Upload an image to eBay Picture Services (EPS) and get back a permanent https://i.ebayimg.com URL.\n\nUses the Trading API (UploadSiteHostedPictures) with a multipart image upload. Use the returned URL in PictureDetails.PictureURL on ebay_create_listing / ebay_revise_listing so eBay hosts the image itself instead of linking to a third-party host, which can go missing later.\n\nRequired: User OAuth token.',
+    inputSchema: uploadPictureSchema.shape,
+    annotations: { readOnlyHint: false },
+    handler: (api, args) => Effect.runPromise(api.trading.uploadPicture(args)),
+  }),
+  defineTool({
+    name: 'ebay_get_store_categories',
+    description:
+      'Get the seller\'s eBay Store custom category tree (the folders offered under "Store category" when creating/revising a listing).\n\nUses the Trading API (GetStore, CategoryStructureOnly). Returns Store.CustomCategories.CustomCategory, each with CategoryID, Name, and optional nested ChildCategory entries. Use a CategoryID here as Storefront.StoreCategoryID in ebay_create_listing / ebay_revise_listing.\n\nRequired: User OAuth token.',
+    inputSchema: getStoreCategoriesSchema.shape,
+    annotations: { readOnlyHint: true },
+    handler: (api) => Effect.runPromise(api.trading.getStoreCategories()),
   }),
 ];

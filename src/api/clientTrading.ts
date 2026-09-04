@@ -30,12 +30,12 @@ interface TradingAuthContext extends TradingFailureContext {
   readonly headers: Record<string, string>;
 }
 
-/** Values required to send one Trading API XML request. */
+/** Values required to send one Trading API request body. */
 interface TradingPostContext extends TradingFailureContext {
   /** Request headers sent to the Trading API endpoint. */
   readonly headers: Record<string, string>;
-  /** XML request body. */
-  readonly xmlBody: string;
+  /** XML request body, or a raw multipart body for binary uploads. */
+  readonly xmlBody: string | Buffer;
 }
 
 /** Values required to parse a Trading API XML response. */
@@ -315,6 +315,88 @@ export class TradingApiClient {
         path,
         headers: authorizedHeaders,
         xmlBody,
+        callName,
+      });
+      const parsed = yield* parseTradingXml({
+        parser: tradingClient.parser,
+        responseText: response.data,
+        callName,
+        path,
+      });
+      const result = yield* readTradingPayload(parsed, responseTag, { callName, path });
+
+      return yield* validateTradingAck(result, { callName, path });
+    });
+  };
+
+  /**
+   * Execute UploadSiteHostedPictures with a binary image, uploading it to eBay
+   * Picture Services (EPS) as a multipart/form-data request and returning a
+   * permanent https://i.ebayimg.com URL for use in listing PictureDetails.
+   *
+   * Unlike every other Trading call here, this one needs a raw multipart body
+   * (XML part + binary image part) instead of a plain `text/xml` request, so it
+   * cannot go through {@link execute}.
+   *
+   * @param input - Image bytes, filename, content type, and optional picture name.
+   * @returns An Effect that succeeds with the parsed response payload.
+   *
+   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/UploadSiteHostedPictures.html
+   */
+  executeUploadPicture = ({
+    imageBuffer,
+    filename,
+    contentType,
+    pictureName,
+  }: {
+    readonly imageBuffer: Buffer;
+    readonly filename: string;
+    readonly contentType: string;
+    readonly pictureName: string | undefined;
+  }): Effect.Effect<Record<string, unknown>, EbayApiError> => {
+    const tradingClient = this;
+    const callName = 'UploadSiteHostedPictures';
+    const requestTag = `${callName}Request`;
+    const responseTag = `${callName}Response`;
+    const path = buildTradingPath(tradingClient.baseUrl);
+    const boundary = `EbayMcpBoundary${Date.now()}${Math.random().toString(16).slice(2)}`;
+    const xmlBody = buildTradingXmlBody(
+      tradingClient.builder,
+      requestTag,
+      pictureName === undefined ? {} : { PictureName: pictureName },
+    );
+    const preamble =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="XML Payload"\r\n` +
+      `Content-Type: text/xml;charset=utf-8\r\n\r\n` +
+      `${xmlBody}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="dummy"; filename="${filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`;
+    const epilogue = `\r\n--${boundary}--\r\n`;
+    const multipartBody = Buffer.concat([
+      Buffer.from(preamble, 'utf-8'),
+      imageBuffer,
+      Buffer.from(epilogue, 'utf-8'),
+    ]);
+    const headers = {
+      ...buildTradingHeaders(callName),
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    };
+
+    apiLogger.debug(`Trading API ${callName}`, { filename, contentType, pictureName });
+
+    return Effect.gen(function* () {
+      const authorizedHeaders = yield* authorizeTradingHeaders({
+        restClient: tradingClient.restClient,
+        headers,
+        callName,
+        path,
+      });
+      const response = yield* postTradingXml({
+        path,
+        headers: authorizedHeaders,
+        xmlBody: multipartBody,
         callName,
       });
       const parsed = yield* parseTradingXml({

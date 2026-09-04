@@ -13,6 +13,7 @@ import { MarketingApi } from '@/api/marketing-and-promotions/marketing.js';
 import { RecommendationApi } from '@/api/marketing-and-promotions/recommendation.js';
 import { DisputeApi } from '@/api/order-management/dispute.js';
 import { FulfillmentApi } from '@/api/order-management/fulfillment.js';
+import { BrowseApi } from '@/api/other/browse.js';
 import { ComplianceApi } from '@/api/other/compliance.js';
 import { EDeliveryApi } from '@/api/other/edelivery.js';
 import { FindingApi } from '@/api/other/finding.js';
@@ -52,6 +53,7 @@ export class EbaySellerApi {
   public translation: TranslationApi;
   public edelivery: EDeliveryApi;
   public finding: FindingApi;
+  public browse: BrowseApi;
   public developer: DeveloperApi;
   public trading: TradingApi;
 
@@ -79,6 +81,7 @@ export class EbaySellerApi {
     this.translation = new TranslationApi(this.client);
     this.edelivery = new EDeliveryApi(this.client);
     this.finding = new FindingApi(this.client);
+    this.browse = new BrowseApi(this.client);
     this.developer = new DeveloperApi(this.client);
     const tradingClient = new TradingApiClient(this.client);
     this.trading = new TradingApi(tradingClient);
@@ -157,6 +160,7 @@ export * from '@/api/marketing-and-promotions/marketing.js';
 export * from '@/api/marketing-and-promotions/recommendation.js';
 export * from '@/api/order-management/dispute.js';
 export * from '@/api/order-management/fulfillment.js';
+export * from '@/api/other/browse.js';
 export * from '@/api/other/compliance.js';
 export * from '@/api/other/edelivery.js';
 export * from '@/api/other/finding.js';

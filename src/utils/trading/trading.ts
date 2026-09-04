@@ -39,3 +39,17 @@ export const relistItemSchema = z.object({
     .optional()
     .describe('Optional Trading API Item fields to change while relisting'),
 });
+
+/** Input accepted by uploadPicture. */
+export const uploadPictureSchema = z.object({
+  imageBase64: z.string().describe('Base64-encoded image file data (no data: URL prefix)'),
+  filename: z.string().describe('File name with extension, e.g. photo.jpg'),
+  contentType: z.string().optional().describe('Image MIME type, defaulting to image/jpeg'),
+  pictureName: z
+    .string()
+    .optional()
+    .describe('Optional label for the picture in eBay Picture Manager'),
+});
+
+/** Input accepted by getStoreCategories. */
+export const getStoreCategoriesSchema = z.object({});

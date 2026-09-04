@@ -87,6 +87,7 @@ junit.xml
 # Cache directories
 .cache/
 .parcel-cache/
+node-compile-cache/
 .eslintcache
 .stylelintcache
 .rpt2_cache/
