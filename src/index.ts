@@ -1,101 +1,148 @@
-/**
- * eBay MCP Server — Streamable HTTP transport for Railway deployment.
- *
- * POST /mcp  → MCP JSON-RPC endpoint (stateless, one transport per request)
- * GET  /     → health check
- * GET  /mcp  → 405 Method Not Allowed (helpful error)
- */
+#!/usr/bin/env node
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { validateEnvironmentConfig } from '@/config/environment.js';
+import { createEbayMcpRuntime, type EbayMcpRuntime } from '@/mcp/runtime.js';
+import { runDiagnostics } from '@/scripts/diagnostics.js';
+import { runSetup } from '@/scripts/setup.js';
+import { runSkillsWizard } from '@/scripts/skills.js';
+import { getErrorMessage } from '@/utils/errors.js';
+import { serverLogger, getLogPaths, isFileLoggingEnabled } from '@/utils/logger.js';
+import { getCachedUpdateNotice } from '@/utils/version.js';
+import { Effect, Either } from 'effect';
+import process from 'node:process';
 
-import express from 'express';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+const args = process.argv.slice(2);
 
-import { registerSearchTools }   from './tools/search.js';
-import { registerListingTools }  from './tools/listings.js';
-import { registerOrderTools }    from './tools/orders.js';
-import { registerMessageTools }  from './tools/messages.js';
-import { registerReturnTools }   from './tools/returns.js';
-import { registerFeedbackTools } from './tools/feedback.js';
-import { registerPolicyTools }   from './tools/policies.js';
+const runCliCommand = async (label: string, command: () => Promise<void>): Promise<void> => {
+  const result = await Effect.runPromise(
+    Effect.either(
+      Effect.tryPromise({
+        try: command,
+        catch: (error) => error,
+      }),
+    ),
+  );
 
-// ─── Validate required env vars ───────────────────────────────────────────────
-const REQUIRED_ENV = ['EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET'];
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`[ebay-mcp] FATAL: Missing required env var: ${key}`);
+  if (Either.isLeft(result)) {
+    serverLogger.error(`${label} failed`, {
+      error: getErrorMessage(result.left, String(result.left)),
+    });
     process.exit(1);
   }
+
+  process.exit(0);
+};
+
+if (args.includes('setup')) {
+  await runCliCommand('Setup', runSetup);
 }
 
-// ─── MCP Server ───────────────────────────────────────────────────────────────
-// A fresh McpServer + transport is created per request (see POST /mcp below).
-// McpServer.connect() throws if the same instance is connected to a second
-// transport, so a shared singleton cannot serve more than one request.
-function createServer(): McpServer {
-  const server = new McpServer({
-    name:    'ebay-mcp-server',
-    version: '2.0.0',
-  });
-
-  registerSearchTools(server);
-  registerListingTools(server);
-  registerOrderTools(server);
-  registerMessageTools(server);
-  registerReturnTools(server);
-  registerFeedbackTools(server);
-  registerPolicyTools(server);
-
-  return server;
+if (args.includes('skills')) {
+  await runCliCommand('Skills install', runSkillsWizard);
 }
 
-// ─── Express App ──────────────────────────────────────────────────────────────
-const app = express();
-app.use(express.json({ limit: '10mb' }));
+if (args.includes('diagnose')) {
+  const exportReport = args.includes('--export') || args.includes('-e');
+  await runCliCommand('Diagnostics', () => runDiagnostics(exportReport));
+}
 
-const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+/**
+ * eBay API MCP Server
+ * Provides access to eBay APIs through Model Context Protocol
+ */
+class EbayMcpServer {
+  private runtime: EbayMcpRuntime;
 
-function checkAuth(req: express.Request, res: express.Response): boolean {
-  if (!MCP_AUTH_TOKEN) return true;
-  const header = req.headers.authorization ?? '';
-  const token  = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (token !== MCP_AUTH_TOKEN) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
+  constructor() {
+    this.runtime = createEbayMcpRuntime({ logToolExecution: true });
+    this.setupErrorHandling();
   }
-  return true;
-}
 
-app.get('/', (_req, res) => {
-  res.json({ status: 'ok', server: 'ebay-mcp-server', version: '2.0.0', tools: 23, endpoint: 'POST /mcp' });
-});
+  /**
+   * Initialize the API (load tokens from storage)
+   */
+  private async initialize(): Promise<void> {
+    await this.runtime.initializeApi();
+  }
 
-app.post('/mcp', async (req, res) => {
-  if (!checkAuth(req, res)) return;
-  try {
-    const server = createServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse:  true,
+  private setupErrorHandling(): void {
+    process.on('SIGINT', async () => {
+      serverLogger.info('Received SIGINT, shutting down...');
+      await this.runtime.server.close();
+      process.exit(0);
     });
-    res.on('close', () => {
-      transport.close();
-      server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (err) {
-    console.error('[ebay-mcp] Error handling /mcp request:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal Server Error' });
+  }
+
+  async run(): Promise<void> {
+    serverLogger.info('Starting eBay API MCP Server');
+
+    // stdout is reserved for the MCP protocol, so a TTY update box (used by the
+    // CLIs) can't run here — surface any newer version as a stderr log line.
+    const updateNotice = getCachedUpdateNotice();
+    if (updateNotice) {
+      serverLogger.info(updateNotice);
     }
+
+    // Validate environment configuration
+    const validation = validateEnvironmentConfig();
+
+    // Log informational notices (e.g. proxy auth mode)
+    validation.infos.forEach((info) => {
+      serverLogger.info(info);
+    });
+
+    // Log warnings
+    if (validation.warnings.length > 0) {
+      validation.warnings.forEach((warning) => {
+        serverLogger.warn(warning);
+      });
+    }
+
+    // Log errors and exit if configuration is invalid
+    if (!validation.isValid) {
+      validation.errors.forEach((error) => {
+        serverLogger.error(error);
+      });
+      serverLogger.error('Please fix the configuration errors and restart the server.');
+      process.exit(1);
+    }
+
+    // Initialize API (load tokens from storage)
+    serverLogger.info('Initializing API client');
+    await this.initialize();
+
+    // Log log file locations if file logging is enabled
+    if (isFileLoggingEnabled()) {
+      const paths = getLogPaths();
+      serverLogger.info('File logging enabled', {
+        logDir: paths.logDir,
+        errorLog: paths.errorLog,
+        combinedLog: paths.combinedLog,
+      });
+    }
+
+    const transport = new StdioServerTransport();
+    await this.runtime.server.connect(transport);
+    serverLogger.info('eBay API MCP Server running on stdio');
   }
-});
+}
 
-app.get('/mcp', (_req, res) => {
-  res.status(405).json({ error: 'Method Not Allowed', message: 'Use POST /mcp' });
-});
+// Start the server
+const server = new EbayMcpServer();
+const started = await Effect.runPromise(
+  Effect.either(
+    Effect.tryPromise({
+      try: () => server.run(),
+      catch: (error) => error,
+    }),
+  ),
+);
 
-const PORT = parseInt(process.env.PORT ?? '3000', 10);
-app.listen(PORT, '0.0.0.0', () => {
-  console.error(`[ebay-mcp] Running on port ${PORT} | Auth: ${MCP_AUTH_TOKEN ? 'on' : 'off'}`);
-});
+if (Either.isLeft(started)) {
+  const error = started.left;
+  serverLogger.error('Fatal error running server', {
+    error: getErrorMessage(error, String(error)),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  process.exit(1);
+}
