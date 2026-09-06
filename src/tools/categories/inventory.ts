@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import type { z as zodTypes } from 'zod';
 import { z } from '@/utils/effectSchema.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { defineTool } from '@/tools/defineTool.js';
@@ -58,11 +59,7 @@ const emptyOutputSchema = {
 } as OutputArgs;
 
 const generatedBodySchema = <Body>(description: string) =>
-  z
-    .custom<Body>((value) => value !== null && typeof value === 'object' && !Array.isArray(value), {
-      message: description,
-    })
-    .describe(description);
+  z.record(z.string(), z.unknown()).describe(description) as unknown as zodTypes.ZodType<Body>;
 
 const skuInputSchema = z.object({
   sku: z.string().describe('The seller-defined SKU'),
