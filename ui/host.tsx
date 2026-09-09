@@ -51,6 +51,30 @@ const extractView = <A extends ViewArchetype>(
   return null;
 };
 
+/** Props for the shared app state wrapper. */
+interface AppShellProps {
+  /** Whether the MCP Apps host handshake completed. */
+  isConnected: boolean;
+  /** Connection error reported by the host app hook. */
+  error: Error | null;
+  /** Rendered app contents once connected. */
+  children: ReactNode;
+}
+
+/** Props for the connected-but-empty placeholder. */
+interface EmptyStateProps {
+  /** Placeholder text shown inside the empty state. */
+  label: string;
+}
+
+/** Turns a {@link ToolCallRef} into a concise natural-language instruction. */
+const describeRef = (ref: ToolCallRef): string => {
+  const args = Object.entries(ref.arguments)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(', ');
+  return `Run the ${ref.tool} tool${args ? ` with ${args}` : ''}.`;
+};
+
 /**
  * Connection + data state for an archetype view.
  *
@@ -101,16 +125,6 @@ export const useViewModel = <A extends ViewArchetype>(archetype: A): ViewState<A
   return { view, app, isConnected, error };
 };
 
-/** Props for the shared app state wrapper. */
-interface AppShellProps {
-  /** Whether the MCP Apps host handshake completed. */
-  isConnected: boolean;
-  /** Connection error reported by the host app hook. */
-  error: Error | null;
-  /** Rendered app contents once connected. */
-  children: ReactNode;
-}
-
 /**
  * Renders the shared connecting / error chrome and shows `children` only once
  * the handshake has completed successfully.
@@ -133,12 +147,6 @@ export const AppShell = ({ isConnected, error, children }: AppShellProps): React
   return children;
 };
 
-/** Props for the connected-but-empty placeholder. */
-interface EmptyStateProps {
-  /** Placeholder text shown inside the empty state. */
-  label: string;
-}
-
 /**
  * Placeholder shown when the app is connected but no view model has arrived yet.
  *
@@ -153,14 +161,6 @@ interface EmptyStateProps {
 export const EmptyState = ({ label }: EmptyStateProps): ReactNode => (
   <div className="state">{label}</div>
 );
-
-/** Turns a {@link ToolCallRef} into a concise natural-language instruction. */
-const describeRef = (ref: ToolCallRef): string => {
-  const args = Object.entries(ref.arguments)
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(', ');
-  return `Run the ${ref.tool} tool${args ? ` with ${args}` : ''}.`;
-};
 
 /**
  * Drills from a list into a detail view. Because a different archetype cannot
