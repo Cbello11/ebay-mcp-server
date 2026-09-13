@@ -18,6 +18,7 @@ import type {
   uploadPictureSchema,
 } from '@/utils/trading/trading.js';
 import { isRecord } from '@/utils/typeGuards.js';
+import { apiLogger } from '@/utils/logger.js';
 import { Effect } from 'effect';
 import type { InferEffectSchema } from '@/utils/effectSchemaTypes.js';
 
@@ -205,11 +206,32 @@ export class TradingApi {
       const itemId = yield* requireStringEffect(request.itemId, 'itemId');
       const fields = yield* requireObjectEffect<Record<string, unknown>>(request.fields, 'fields');
 
+      // This seller account uses eBay Business Policies. Strip legacy
+      // shipping/payment/return fields before sending — passing them causes
+      // eBay warning 21919456 and may auto-create unwanted policies.
+      // Callers must use SellerProfiles.Seller{Shipping|Payment|Return}Profile
+      // with the appropriate policy ID instead.
+      const LEGACY_POLICY_FIELDS = ['ShippingDetails', 'PaymentMethods', 'ReturnPolicy'];
+      const strippedFields: Record<string, unknown> = { ...fields };
+      const foundLegacy: string[] = [];
+      for (const key of LEGACY_POLICY_FIELDS) {
+        if (key in strippedFields) {
+          foundLegacy.push(key);
+          delete strippedFields[key];
+        }
+      }
+      if (foundLegacy.length > 0) {
+        apiLogger.warn(
+          `reviseListing: stripped legacy policy fields — use SellerProfiles instead`,
+          { itemId, strippedFields: foundLegacy },
+        );
+      }
+
       // ReviseItem is the listing-type-agnostic call; ReviseFixedPriceItem
       // rejects auction (Chinese) listings with "Unsupported ListingType" even
       // for fields like Title that both listing types support.
       return yield* tradingClient
-        .execute('ReviseItem', { Item: { ...fields, ItemID: itemId } })
+        .execute('ReviseItem', { Item: { ...strippedFields, ItemID: itemId } })
         .pipe(Effect.map(stripFees));
     });
   };

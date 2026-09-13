@@ -33,7 +33,7 @@ export const tradingEntries: ToolEntry[] = [
   defineTool({
     name: 'ebay_create_listing',
     description:
-      'Create a new fixed-price listing.\n\nUses the Trading API (AddFixedPriceItem). Requires complete item details.\n\nRequired: User OAuth token.',
+      'Create a new fixed-price listing.\n\nUses the Trading API (AddFixedPriceItem). Requires complete item details.\n\nBUSINESS POLICIES (required for this seller account): Do NOT use legacy fields ShippingDetails, PaymentMethods, or ReturnPolicy. Instead pass policy IDs under SellerProfiles:\n- SellerProfiles.SellerShippingProfile.ShippingProfileID\n- SellerProfiles.SellerPaymentProfile.PaymentProfileID\n- SellerProfiles.SellerReturnProfile.ReturnProfileID\n\nRetrieve your policy IDs via the ebay_get_fulfillment_policies, ebay_get_payment_policies, and ebay_get_return_policies tools.\n\nRequired: User OAuth token.',
     inputSchema: createListingSchema.shape,
     annotations: { readOnlyHint: false },
     handler: (api, args) => Effect.runPromise(api.trading.createListing(args)),
@@ -41,7 +41,7 @@ export const tradingEntries: ToolEntry[] = [
   defineTool({
     name: 'ebay_revise_listing',
     description:
-      'Revise an existing fixed-price listing. Update quantity, price, title, description, or any other field.\n\nUses the Trading API (ReviseFixedPriceItem). Only send the fields you want to change.\n\nExamples:\n- Update quantity: { "Quantity": 10 }\n- Update price: { "StartPrice": 14.99 }\n- Update title: { "Title": "New Title" }\n- Multiple fields: { "Quantity": 10, "StartPrice": 14.99 }\n\nRequired: User OAuth token.',
+      'Revise an existing fixed-price listing. Update quantity, price, title, description, or any other field.\n\nUses the Trading API (ReviseItem). Only send the fields you want to change.\n\nExamples:\n- Update quantity: { "Quantity": 10 }\n- Update price: { "StartPrice": 14.99 }\n- Update title: { "Title": "New Title" }\n- Multiple fields: { "Quantity": 10, "StartPrice": 14.99 }\n\nBUSINESS POLICIES (required for this seller account): Do NOT use legacy fields ShippingDetails, PaymentMethods, or ReturnPolicy. eBay will reject them with error 21919456. To update shipping/payment/return policies pass policy IDs under SellerProfiles:\n- SellerProfiles.SellerShippingProfile.ShippingProfileID\n- SellerProfiles.SellerPaymentProfile.PaymentProfileID\n- SellerProfiles.SellerReturnProfile.ReturnProfileID\n\nRetrieve your policy IDs via the ebay_get_fulfillment_policies, ebay_get_payment_policies, and ebay_get_return_policies tools.\n\nRequired: User OAuth token.',
     inputSchema: reviseListingSchema.shape,
     annotations: { readOnlyHint: false },
     handler: (api, args) => Effect.runPromise(api.trading.reviseListing(args)),
