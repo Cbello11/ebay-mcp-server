@@ -4,12 +4,13 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 /**
  * Analytics API Schemas
  *
- * This file contains Effect-backed schemas for the Sell Analytics API.
- * Schemas are organized by type and include all analytics-related endpoints.
+ * Effect-backed schemas for the Sell Analytics API.
+ * All enum values sourced from the generated OpenAPI spec at
+ * src/types/sell-apps/analytics-and-report/sellAnalyticsV1Oas3.ts
  */
 
 // ============================================================================
-// Common Schemas
+// Shared sub-schemas
 // ============================================================================
 
 const errorParameterSchema = z.object({
@@ -35,7 +36,7 @@ const valueSchema = z.object({
 });
 
 // ============================================================================
-// Customer Service Metric Schemas
+// Customer Service Metric response schemas
 // ============================================================================
 
 const benchmarkMetadataSchema = z.object({
@@ -91,7 +92,7 @@ const getCustomerServiceMetricResponseSchema = z.object({
 });
 
 // ============================================================================
-// Seller Standards Profile Schemas
+// Seller Standards Profile response schemas
 // ============================================================================
 
 const cycleSchema = z.object({
@@ -114,7 +115,7 @@ const findSellerStandardsProfilesResponseSchema = z.object({
 });
 
 // ============================================================================
-// Traffic Report Schemas
+// Traffic Report response schemas
 // ============================================================================
 
 const definitionSchema = z.object({
@@ -159,37 +160,164 @@ const reportSchema = z.object({
 });
 
 // ============================================================================
-// Input Schemas for Operations
+// Input schemas — with full enum documentation and examples
 // ============================================================================
 
-/** Input accepted by Analytics API findSellerStandardsProfiles. */
+/**
+ * Input accepted by Analytics API findSellerStandardsProfiles.
+ * No parameters required — returns all profiles for the seller.
+ */
 export const findSellerStandardsProfilesInputSchema = z.object({});
 
-/** Input accepted by Analytics API getCustomerServiceMetric. */
+/**
+ * Input accepted by Analytics API getCustomerServiceMetric.
+ *
+ * customer_service_metric_type values:
+ *   ITEM_NOT_AS_DESCRIBED — cases where buyer says item didn't match the listing
+ *   ITEM_NOT_RECEIVED     — cases where buyer says item never arrived
+ *
+ * evaluation_type values:
+ *   CURRENT   — official monthly evaluation (runs around the 20th of each month)
+ *   PROJECTED — real-time projection of where you'll land at the next evaluation
+ *
+ * evaluationMarketplaceId values (subset supported by this API):
+ *   EBAY_US, EBAY_GB, EBAY_DE, EBAY_AU, EBAY_FR, EBAY_IT, EBAY_ES, EBAY_CA
+ */
 export const getCustomerServiceMetricInputSchema = z.object({
   customerServiceMetricType: z
-    .string()
-    .describe('Customer service metric type, e.g., ITEM_NOT_AS_DESCRIBED'),
-  evaluationType: z.string().describe('Evaluation type, e.g., CURRENT or PROJECTED'),
-  evaluationMarketplaceId: z.string().describe('Marketplace ID used for the evaluation'),
+    .enum(['ITEM_NOT_AS_DESCRIBED', 'ITEM_NOT_RECEIVED'])
+    .describe(
+      'Type of customer service metric to evaluate.\n' +
+        'ITEM_NOT_AS_DESCRIBED: buyer claims do not match listing description.\n' +
+        'ITEM_NOT_RECEIVED: buyer claims item never arrived.',
+    ),
+  evaluationType: z
+    .enum(['CURRENT', 'PROJECTED'])
+    .describe(
+      'CURRENT: values from the most recent official monthly eBay evaluation (runs ~20th of each month).\n' +
+        'PROJECTED: real-time snapshot showing where you currently stand heading into the next evaluation.',
+    ),
+  evaluationMarketplaceId: z
+    .enum([
+      'EBAY_US',
+      'EBAY_GB',
+      'EBAY_DE',
+      'EBAY_AU',
+      'EBAY_FR',
+      'EBAY_IT',
+      'EBAY_ES',
+      'EBAY_CA',
+      'EBAY_MOTORS_US',
+    ])
+    .describe(
+      'Marketplace to evaluate metrics for. Only a subset of marketplaces are supported by this API.\n' +
+        'Use EBAY_US for the US marketplace.',
+    ),
 });
 
-/** Input accepted by Analytics API getSellerStandardsProfile. */
+/**
+ * Input accepted by Analytics API getSellerStandardsProfile.
+ *
+ * program values:
+ *   PROGRAM_US     — US marketplace seller standards
+ *   PROGRAM_UK     — UK marketplace seller standards
+ *   PROGRAM_DE     — German marketplace seller standards
+ *   PROGRAM_GLOBAL — aggregate across all marketplaces where seller has activity
+ *
+ * cycle values:
+ *   CURRENT   — metrics from the last official monthly eBay evaluation
+ *   PROJECTED — metrics as of right now (real-time)
+ */
 export const getSellerStandardsProfileInputSchema = z.object({
-  program: z.string().describe('Seller standards program identifier'),
-  cycle: z.string().describe('Seller standards cycle, e.g., CURRENT or PROJECTED'),
+  program: z
+    .enum(['PROGRAM_US', 'PROGRAM_UK', 'PROGRAM_DE', 'PROGRAM_GLOBAL'])
+    .describe(
+      'Seller standards program (region) to retrieve.\n' +
+        'PROGRAM_US: US marketplace. PROGRAM_UK: UK marketplace.\n' +
+        'PROGRAM_DE: German marketplace. PROGRAM_GLOBAL: all marketplaces combined.\n' +
+        'Use findSellerStandardsProfiles first if unsure which programs apply to your account.',
+    ),
+  cycle: z
+    .enum(['CURRENT', 'PROJECTED'])
+    .describe(
+      'CURRENT: values from the last official monthly eBay evaluation (~20th of each month).\n' +
+        'PROJECTED: real-time values showing where you stand right now.',
+    ),
 });
 
-/** Input accepted by Analytics API getTrafficReport. */
+/**
+ * Input accepted by Analytics API getTrafficReport.
+ *
+ * dimension values:
+ *   DAY     — one record per day in the date range; marketplace_ids filter required
+ *   LISTING — one record per listing; returns up to 200 listings if listing_ids not specified
+ *
+ * filter format (comma-separated, URL-encode curly braces and brackets):
+ *   date_range:[YYYYMMDD..YYYYMMDD]            required — max 90-day range
+ *   marketplace_ids:{EBAY_US}                  required when dimension=DAY
+ *   listing_ids:{123456|789012}                optional — up to 200 IDs, pipe-separated
+ *
+ * metric values (comma-separated, case-insensitive):
+ *   CLICK_THROUGH_RATE
+ *   LISTING_IMPRESSION_SEARCH_RESULTS_PAGE
+ *   LISTING_IMPRESSION_STORE
+ *   LISTING_IMPRESSION_TOTAL
+ *   LISTING_VIEWS_SOURCE_DIRECT
+ *   LISTING_VIEWS_SOURCE_OFF_EBAY
+ *   LISTING_VIEWS_SOURCE_OTHER_EBAY
+ *   LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE
+ *   LISTING_VIEWS_SOURCE_STORE
+ *   LISTING_VIEWS_TOTAL
+ *   SALES_CONVERSION_RATE
+ *   TOTAL_IMPRESSION_TOTAL
+ *   TRANSACTION
+ *
+ * sort: optional — prefix with "-" for descending, e.g. "-CLICK_THROUGH_RATE"
+ *   Note: SALES_CONVERSION_RATE cannot be sorted; TRANSACTION descending only.
+ */
 export const getTrafficReportInputSchema = z.object({
-  dimension: z.string().describe('Report dimension, e.g., LISTING or DAY'),
-  filter: z.string().describe('eBay traffic report filter expression'),
-  metric: z.string().describe('Comma-delimited report metrics to retrieve'),
-  sort: z.string().optional().describe('Optional metric sort expression'),
+  dimension: z
+    .enum(['DAY', 'LISTING'])
+    .describe(
+      'How to slice the report data.\n' +
+        'DAY: one data point per day — requires marketplace_ids in the filter.\n' +
+        'LISTING: one data point per listing — returns up to 200 listings unless listing_ids filter is set.',
+    ),
+  filter: z
+    .string()
+    .describe(
+      'Comma-separated filter expression. date_range is required.\n' +
+        'Format: date_range:[YYYYMMDD..YYYYMMDD],marketplace_ids:{EBAY_US}\n' +
+        'Example (last 30 days, US): date_range:[20240601..20240701],marketplace_ids:{EBAY_US}\n' +
+        'Example (specific listings): date_range:[20240601..20240701],listing_ids:{123456789|987654321}\n' +
+        'Max date range: 90 days. Earliest start date: 730 days ago.\n' +
+        'marketplace_ids is required when dimension=DAY.\n' +
+        'listing_ids accepts up to 200 IDs separated by pipe characters.',
+    ),
+  metric: z
+    .string()
+    .describe(
+      'Comma-separated list of metrics to include in the report (case-insensitive).\n' +
+        'Valid values: CLICK_THROUGH_RATE, LISTING_IMPRESSION_SEARCH_RESULTS_PAGE,\n' +
+        'LISTING_IMPRESSION_STORE, LISTING_IMPRESSION_TOTAL,\n' +
+        'LISTING_VIEWS_SOURCE_DIRECT, LISTING_VIEWS_SOURCE_OFF_EBAY,\n' +
+        'LISTING_VIEWS_SOURCE_OTHER_EBAY, LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE,\n' +
+        'LISTING_VIEWS_SOURCE_STORE, LISTING_VIEWS_TOTAL,\n' +
+        'SALES_CONVERSION_RATE, TOTAL_IMPRESSION_TOTAL, TRANSACTION\n' +
+        'Example: LISTING_IMPRESSION_TOTAL,LISTING_VIEWS_TOTAL,TRANSACTION',
+    ),
+  sort: z
+    .string()
+    .optional()
+    .describe(
+      'Optional: sort the report by a single metric included in the metric parameter.\n' +
+        'Prefix with "-" for descending order. Example: -CLICK_THROUGH_RATE\n' +
+        'Constraints: SALES_CONVERSION_RATE cannot be sorted; TRANSACTION is descending only.',
+    ),
 });
 
 // ============================================================================
-// JSON Schema Conversion Functions
+// JSON Schema conversion (used by MCP tool registration)
 // ============================================================================
 
 /**
@@ -203,7 +331,6 @@ export const getTrafficReportInputSchema = z.object({
  */
 export const getAnalyticsJsonSchemas = () => {
   return {
-    // Customer Service Metrics
     getCustomerServiceMetricInput: zodToJsonSchema(
       getCustomerServiceMetricInputSchema,
       'getCustomerServiceMetricInput',
@@ -212,8 +339,6 @@ export const getAnalyticsJsonSchemas = () => {
       getCustomerServiceMetricResponseSchema,
       'getCustomerServiceMetricOutput',
     ),
-
-    // Seller Standards Profiles
     findSellerStandardsProfilesInput: zodToJsonSchema(
       findSellerStandardsProfilesInputSchema,
       'findSellerStandardsProfilesInput',
@@ -230,12 +355,8 @@ export const getAnalyticsJsonSchemas = () => {
       standardsProfileSchema,
       'getSellerStandardsProfileOutput',
     ),
-
-    // Traffic Reports
     getTrafficReportInput: zodToJsonSchema(getTrafficReportInputSchema, 'getTrafficReportInput'),
     getTrafficReportOutput: zodToJsonSchema(reportSchema, 'getTrafficReportOutput'),
-
-    // Common Types
     benchmarkMetadata: zodToJsonSchema(benchmarkMetadataSchema, 'benchmarkMetadata'),
     cycle: zodToJsonSchema(cycleSchema, 'cycle'),
     definition: zodToJsonSchema(definitionSchema, 'definition'),
