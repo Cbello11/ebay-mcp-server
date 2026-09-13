@@ -18,9 +18,107 @@ import {
 import type { OutputArgs } from '@/tools/types.js';
 import { getApiStatusFeed } from '@/utils/apiStatusFeed.js';
 import type { ToolEntry } from '@/tools/registry.js';
+import { z } from 'zod';
+
+const emptyResponseSchema: OutputArgs = {
+  type: 'object',
+  properties: {},
+  description: 'Empty response on successful operation',
+};
 
 /** Developer API tools for eBay application and keyset management. */
 export const developerEntries: ToolEntry[] = [
+  defineTool({
+    name: 'ebay_check_health',
+    description:
+      'Run a comprehensive health check on the eBay MCP Server. Verifies OAuth status, eBay API connectivity, rate limits, and environment configuration. Use this to diagnose issues or confirm the server is ready.',
+    inputSchema: z.object({}).shape,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string' },
+        timestamp: { type: 'string' },
+        environment: { type: 'string' },
+        message: { type: 'string' },
+      },
+      description: 'Health check result for the eBay MCP Server',
+    } as OutputArgs,
+    handler: (api) =>
+      Effect.runPromise(
+        Effect.promise(async () => {
+          const config = api.getConfig();
+          const hasTokens = api.hasUserTokens();
+
+          return {
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            environment: config.environment,
+            message: `eBay MCP Server ready. Using ${hasTokens ? 'user tokens' : 'client credentials'}.`,
+          };
+        })
+      ),
+  }),
+  defineTool({
+    name: 'ebay_get_environment',
+    description:
+      'Check whether the eBay MCP Server is configured for sandbox or production. IMPORTANT: Use this before making data-mutating calls to confirm you are in the correct environment.',
+    inputSchema: z.object({}).shape,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        environment: { type: 'string' },
+        isSandbox: { type: 'boolean' },
+        isProduction: { type: 'boolean' },
+        warning: { type: 'string' },
+      },
+      description: 'Current environment configuration',
+    } as OutputArgs,
+    handler: (api) =>
+      Effect.runPromise(
+        Effect.promise(async () => {
+          const config = api.getConfig();
+          return {
+            environment: config.environment,
+            isSandbox: config.environment === 'sandbox',
+            isProduction: config.environment === 'production',
+            warning:
+              config.environment === 'production'
+                ? 'PRODUCTION - All mutations affect live eBay account'
+                : 'SANDBOX - Safe for testing',
+          };
+        })
+      ),
+  }),
+  defineTool({
+    name: 'ebay_get_token_status',
+    description:
+      'Check the status of your OAuth tokens including expiry times. Use this to diagnose token-related errors or proactively refresh before expiry.',
+    inputSchema: z.object({}).shape,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        hasUserTokens: { type: 'boolean' },
+        authenticationMethod: { type: 'string' },
+        message: { type: 'string' },
+      },
+      description: 'Current token status',
+    } as OutputArgs,
+    handler: (api) =>
+      Effect.runPromise(
+        Effect.promise(async () => {
+          const hasUserTokens = api.hasUserTokens();
+          return {
+            hasUserTokens,
+            authenticationMethod: hasUserTokens
+              ? 'User Tokens (10k-50k req/day)'
+              : 'Client Credentials (1k req/day)',
+            message: hasUserTokens
+              ? 'User tokens configured. Run npm run setup to refresh if they expire.'
+              : 'Using client credentials. Run npm run setup to enable user tokens and higher rate limits.',
+          };
+        })
+      ),
+  }),
   defineTool({
     name: 'ebay_get_api_status',
     description:
@@ -47,7 +145,7 @@ export const developerEntries: ToolEntry[] = [
         error: { type: 'string' },
       },
       description: 'Latest API status items from eBay developer feed',
-    },
+    } as OutputArgs,
     handler: (_api, args) =>
       Effect.runPromise(
         getApiStatusFeed(args).pipe(
@@ -124,3 +222,4 @@ export const developerEntries: ToolEntry[] = [
     handler: (api, args) => Effect.runPromise(api.developer.getSigningKey(args)),
   }),
 ];
+
