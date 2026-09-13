@@ -242,6 +242,28 @@ function sendInvalidSession(res: Response): void {
 }
 
 /**
+ * Reject a request whose session ID is unknown to this process.
+ *
+ * Uses 404 (not 400) because the MCP streamable-HTTP spec makes 404 the signal that tells a client
+ * to discard its cached session ID and start a fresh session. A 400 gives the client no such signal,
+ * so it replays the dead ID on every reconnect attempt.
+ *
+ * @param res - Express response to terminate.
+ * @param sessionId - The unknown session ID supplied by the client.
+ */
+function sendUnknownSession(res: Response, sessionId: string): void {
+  serverLogger.info(`Unknown MCP session ${sessionId}; instructing client to re-initialize`);
+  res.status(404).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32_001,
+      message: 'Session not found: client must start a new session',
+    },
+    id: null,
+  });
+}
+
+/**
  * Create the Express app that serves OAuth metadata and streamable HTTP MCP sessions.
  *
  * @param config - HTTP transport config including OAuth and static asset settings.
@@ -300,7 +322,15 @@ export const createHttpMcpApp = async (
 
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)!;
-    } else if (!sessionId && isInitializeRequest(req.body)) {
+    } else if (isInitializeRequest(req.body)) {
+      // An initialize request is authoritative: honour it even when the client replays a stale
+      // session ID. Previously the `!sessionId` guard sent such handshakes to the 400 below, so a
+      // client that had cached an ID from a recycled process could never reconnect.
+      if (sessionId) {
+        serverLogger.info(`Initialize carried stale session ${sessionId}; starting a new session`);
+        req.headers['mcp-session-id'] = undefined;
+      }
+
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (initializedSessionId) => {
@@ -318,6 +348,9 @@ export const createHttpMcpApp = async (
 
       const server = await createMcpServer(serverUrl);
       await server.connect(transport);
+    } else if (sessionId) {
+      sendUnknownSession(res, sessionId);
+      return;
     } else {
       res.status(400).json({
         jsonrpc: '2.0',
@@ -337,8 +370,13 @@ export const createHttpMcpApp = async (
     const sessionHeader = req.headers['mcp-session-id'];
     const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined;
 
-    if (!(sessionId && transports.has(sessionId))) {
+    if (!sessionId) {
       sendInvalidSession(res);
+      return;
+    }
+
+    if (!transports.has(sessionId)) {
+      sendUnknownSession(res, sessionId);
       return;
     }
 

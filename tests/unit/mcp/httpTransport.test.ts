@@ -9,6 +9,19 @@ import {
 } from '@/mcp/httpTransport.js';
 import process from 'node:process';
 
+const UNKNOWN_SESSION_ID = '00000000-0000-0000-0000-000000000000';
+
+const INITIALIZE_BODY = {
+  id: 1,
+  jsonrpc: '2.0',
+  method: 'initialize',
+  params: {
+    capabilities: {},
+    clientInfo: { name: 'test-client', version: '1.0.0' },
+    protocolVersion: '2024-11-05',
+  },
+};
+
 function createTestConfig(overrides: Partial<HttpTransportConfig> = {}): HttpTransportConfig {
   return {
     authEnabled: false,
@@ -119,6 +132,63 @@ describe('HTTP MCP transport', () => {
     expect(response.body).toEqual({
       error: 'invalid_session',
       error_description: 'Invalid or missing session ID',
+    });
+  });
+
+  it('returns 404 for a session request carrying an unknown session id', async () => {
+    const app = await createHttpMcpApp(createTestConfig());
+    const response = await request(app).get('/').set('mcp-session-id', UNKNOWN_SESSION_ID);
+
+    // 404 (not 400) is what tells an MCP client to discard the id and re-initialize.
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      error: { code: -32_001 },
+      jsonrpc: '2.0',
+    });
+  });
+
+  it('honours an initialize request that replays a stale session id', async () => {
+    const app = await createHttpMcpApp(createTestConfig());
+    const response = await request(app)
+      .post('/')
+      .set('Accept', 'application/json, text/event-stream')
+      .set('mcp-session-id', UNKNOWN_SESSION_ID)
+      .send(INITIALIZE_BODY);
+
+    // Regression: the old `!sessionId` guard rejected this with 400, so a client that had cached a
+    // session id from a recycled process could never reconnect.
+    expect(response.status).toBe(200);
+    expect(response.headers['mcp-session-id']).toBeDefined();
+    expect(response.headers['mcp-session-id']).not.toBe(UNKNOWN_SESSION_ID);
+    // Unlike the error-path cases, this is the only test here that completes a real handshake —
+    // createMcpServer + connect registers all 302 tools, which overruns the 10s default.
+  }, 45_000);
+
+  it('returns 404 for a non-initialize POST with an unknown session id', async () => {
+    const app = await createHttpMcpApp(createTestConfig());
+    const response = await request(app)
+      .post('/')
+      .set('Accept', 'application/json, text/event-stream')
+      .set('mcp-session-id', UNKNOWN_SESSION_ID)
+      .send({ id: 2, jsonrpc: '2.0', method: 'tools/list', params: {} });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      error: { code: -32_001 },
+      jsonrpc: '2.0',
+    });
+  });
+
+  it('still returns 400 for a POST with no session id that is not an initialize', async () => {
+    const app = await createHttpMcpApp(createTestConfig());
+    const response = await request(app)
+      .post('/')
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ id: 2, jsonrpc: '2.0', method: 'tools/list', params: {} });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: { code: -32_000 },
     });
   });
 
