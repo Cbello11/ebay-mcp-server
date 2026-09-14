@@ -84,7 +84,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "dotenv-stringify": "^3.0.1",
-    "effect": "^3.21.4",
+    "effect": "3.21.4",
     "express": "^5.2.1",
     "fast-xml-builder": "1.2.0",
     "fast-xml-parser": "^5.9.0",
@@ -133,3 +133,4 @@
     }
   }
 }
+
