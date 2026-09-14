@@ -17,7 +17,7 @@ it('findSellerStandardsProfiles gets all seller standards profiles', async () =>
         cycle: { cycleType: 'CURRENT' },
         defaultProgram: true,
         evaluationDate: '2024-01-01',
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         standardsLevel: 'STANDARD',
       },
     ],
@@ -42,20 +42,20 @@ it('getSellerStandardsProfile gets a specific seller standards profile', async (
   const mockResponse = {
     cycle: { cycleType: 'CURRENT' },
     defaultProgram: true,
-    program: 'CUSTOMER_SERVICE',
+    program: 'PROGRAM_US',
   };
   vi.mocked(harness.client.get).mockResolvedValue(mockResponse);
 
   const result = await Effect.runPromise(
     harness.api.getSellerStandardsProfile({
-      program: 'CUSTOMER_SERVICE',
+      program: 'PROGRAM_US',
       cycle: 'CURRENT',
     }),
   );
 
   expect(result).toEqual(mockResponse);
   expect(harness.client.get).toHaveBeenCalledWith(
-    '/sell/analytics/v1/seller_standards_profile/CUSTOMER_SERVICE/CURRENT',
+    '/sell/analytics/v1/seller_standards_profile/PROGRAM_US/CURRENT',
   );
 });
 
@@ -79,7 +79,7 @@ it('getSellerStandardsProfile fails with a tagged error when cycle is missing', 
   const error = await Effect.runPromise(
     Effect.flip(
       harness.api.getSellerStandardsProfile({
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: invalidInput(''),
       }),
     ),
@@ -97,7 +97,7 @@ it('getSellerStandardsProfile wraps transport failures in EbayApiError', async (
   const error = await Effect.runPromise(
     Effect.flip(
       harness.api.getSellerStandardsProfile({
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: 'CURRENT',
       }),
     ),

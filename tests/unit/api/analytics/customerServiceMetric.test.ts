@@ -23,7 +23,7 @@ it('getCustomerServiceMetric gets customer service metrics with marketplace para
 
   const result = await Effect.runPromise(
     harness.api.getCustomerServiceMetric({
-      customerServiceMetricType: 'TRANSACTION',
+      customerServiceMetricType: 'ITEM_NOT_RECEIVED',
       evaluationType: 'CURRENT',
       evaluationMarketplaceId: 'EBAY_US',
     }),
@@ -31,7 +31,7 @@ it('getCustomerServiceMetric gets customer service metrics with marketplace para
 
   expect(result).toEqual(mockResponse);
   expect(harness.client.get).toHaveBeenCalledWith(
-    '/sell/analytics/v1/customer_service_metric/TRANSACTION/CURRENT',
+    '/sell/analytics/v1/customer_service_metric/ITEM_NOT_RECEIVED/CURRENT',
     {
       evaluation_marketplace_id: 'EBAY_US',
     },
@@ -59,7 +59,7 @@ it('getCustomerServiceMetric fails when evaluationType is missing', async () => 
   const error = await Effect.runPromise(
     Effect.flip(
       harness.api.getCustomerServiceMetric({
-        customerServiceMetricType: 'TRANSACTION',
+        customerServiceMetricType: 'ITEM_NOT_RECEIVED',
         evaluationType: invalidInput(''),
         evaluationMarketplaceId: 'EBAY_US',
       }),
@@ -76,7 +76,7 @@ it('getCustomerServiceMetric fails when evaluationMarketplaceId is missing', asy
   const error = await Effect.runPromise(
     Effect.flip(
       harness.api.getCustomerServiceMetric({
-        customerServiceMetricType: 'TRANSACTION',
+        customerServiceMetricType: 'ITEM_NOT_RECEIVED',
         evaluationType: 'CURRENT',
         evaluationMarketplaceId: invalidInput(''),
       }),
@@ -95,7 +95,7 @@ it('getCustomerServiceMetric wraps transport failures in EbayApiError', async ()
   const error = await Effect.runPromise(
     Effect.flip(
       harness.api.getCustomerServiceMetric({
-        customerServiceMetricType: 'TRANSACTION',
+        customerServiceMetricType: 'ITEM_NOT_RECEIVED',
         evaluationType: 'CURRENT',
         evaluationMarketplaceId: 'EBAY_US',
       }),
