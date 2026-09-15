@@ -144,7 +144,7 @@ export class AnalyticsApi {
    * ```ts
    * const profile = await Effect.runPromise(
    *   analyticsApi.getSellerStandardsProfile({
-   *     program: 'CUSTOMER_SERVICE',
+   *     program: 'PROGRAM_US',
    *     cycle: 'CURRENT',
    *   }),
    * );
