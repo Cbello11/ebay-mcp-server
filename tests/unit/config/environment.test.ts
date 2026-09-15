@@ -54,6 +54,9 @@ describe('Environment Configuration', () => {
 
       delete process.env.EBAY_CLIENT_ID;
       delete process.env.EBAY_CLIENT_SECRET;
+      // `config/environment.ts` loads dotenv at import time, so a real `.env` on the
+      // developer's machine leaks EBAY_ENVIRONMENT in and defeats the default asserted below.
+      delete process.env.EBAY_ENVIRONMENT;
 
       const config = getEbayConfig();
 

@@ -968,12 +968,12 @@ describe('Tools Layer', () => {
       );
 
       const result = await executeTool(mockApi, 'ebay_get_seller_standards_profile', {
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: 'CURRENT',
       });
 
       expect(mockApi.analytics.getSellerStandardsProfile).toHaveBeenCalledWith({
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: 'CURRENT',
       });
       expect(result).toBe(mockResponse);

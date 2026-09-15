@@ -1198,11 +1198,11 @@ describe('Comprehensive Tools Coverage', () => {
         Effect.succeed(mockResponse),
       );
       await executeTool(mockApi, 'ebay_get_seller_standards_profile', {
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: 'CURRENT',
       });
       expect(mockApi.analytics.getSellerStandardsProfile).toHaveBeenCalledWith({
-        program: 'CUSTOMER_SERVICE',
+        program: 'PROGRAM_US',
         cycle: 'CURRENT',
       });
     });
@@ -1213,12 +1213,12 @@ describe('Comprehensive Tools Coverage', () => {
         Effect.succeed(mockResponse),
       );
       await executeTool(mockApi, 'ebay_get_customer_service_metric', {
-        customerServiceMetricType: 'INQUIRY_RESPONSE',
+        customerServiceMetricType: 'ITEM_NOT_AS_DESCRIBED',
         evaluationType: 'CURRENT',
         evaluationMarketplaceId: 'EBAY_US',
       });
       expect(mockApi.analytics.getCustomerServiceMetric).toHaveBeenCalledWith({
-        customerServiceMetricType: 'INQUIRY_RESPONSE',
+        customerServiceMetricType: 'ITEM_NOT_AS_DESCRIBED',
         evaluationType: 'CURRENT',
         evaluationMarketplaceId: 'EBAY_US',
       });
