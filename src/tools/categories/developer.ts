@@ -55,7 +55,7 @@ export const developerEntries: ToolEntry[] = [
             environment: config.environment,
             message: `eBay MCP Server ready. Using ${hasTokens ? 'user tokens' : 'client credentials'}.`,
           };
-        })
+        }),
       ),
   }),
   defineTool({
@@ -86,37 +86,7 @@ export const developerEntries: ToolEntry[] = [
                 ? 'PRODUCTION - All mutations affect live eBay account'
                 : 'SANDBOX - Safe for testing',
           };
-        })
-      ),
-  }),
-  defineTool({
-    name: 'ebay_get_token_status',
-    description:
-      'Check the status of your OAuth tokens including expiry times. Use this to diagnose token-related errors or proactively refresh before expiry.',
-    inputSchema: z.object({}).shape,
-    outputSchema: {
-      type: 'object',
-      properties: {
-        hasUserTokens: { type: 'boolean' },
-        authenticationMethod: { type: 'string' },
-        message: { type: 'string' },
-      },
-      description: 'Current token status',
-    } as OutputArgs,
-    handler: (api) =>
-      Effect.runPromise(
-        Effect.promise(async () => {
-          const hasUserTokens = api.hasUserTokens();
-          return {
-            hasUserTokens,
-            authenticationMethod: hasUserTokens
-              ? 'User Tokens (10k-50k req/day)'
-              : 'Client Credentials (1k req/day)',
-            message: hasUserTokens
-              ? 'User tokens configured. Run npm run setup to refresh if they expire.'
-              : 'Using client credentials. Run npm run setup to enable user tokens and higher rate limits.',
-          };
-        })
+        }),
       ),
   }),
   defineTool({
@@ -222,4 +192,3 @@ export const developerEntries: ToolEntry[] = [
     handler: (api, args) => Effect.runPromise(api.developer.getSigningKey(args)),
   }),
 ];
-
