@@ -65,7 +65,7 @@ export const tradingEntries: ToolEntry[] = [
   defineTool({
     name: 'ebay_upload_site_hosted_picture',
     description:
-      'Upload an image to eBay Picture Services (EPS) and get back a permanent https://i.ebayimg.com URL.\n\nUses the Trading API (UploadSiteHostedPictures) with a multipart image upload. Use the returned URL in PictureDetails.PictureURL on ebay_create_listing / ebay_revise_listing so eBay hosts the image itself instead of linking to a third-party host, which can go missing later.\n\nRequired: User OAuth token.',
+      'Upload an image to eBay and get back a permanent eBay-hosted image URL.\n\nUses the Commerce Media API (createImageFromFile) with a multipart image upload. Supply exactly one of: imageUrl (public HTTPS URL — the server downloads it, and this is the option that works against a remote/hosted server) or imagePath (a file on the MCP server host, for local stdio use). Either way the server sends the bytes itself, so image data never travels through MCP as Base64. Use the returned URL in PictureDetails.PictureURL on ebay_create_listing / ebay_revise_listing so eBay hosts the image itself instead of linking to a third-party host, which can go missing later.\n\nRequired: User OAuth token.',
     inputSchema: uploadPictureSchema.shape,
     annotations: { readOnlyHint: false },
     handler: (api, args) => Effect.runPromise(api.trading.uploadPicture(args)),

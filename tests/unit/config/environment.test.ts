@@ -3,6 +3,7 @@ import {
   getEbayConfig,
   getBaseUrl,
   getIdentityBaseUrl,
+  getMediaBaseUrl,
   getProxyAuthConfig,
   getTradingSiteId,
   validateEnvironmentConfig,
@@ -264,6 +265,30 @@ describe('Environment Configuration', () => {
       expect(getBaseUrl('production')).toBe('https://api.ebay.com');
       expect(getBaseUrl('sandbox', undefined)).toBe('https://api.sandbox.ebay.com');
       expect(getIdentityBaseUrl('production')).toBe('https://apiz.ebay.com');
+    });
+  });
+
+  describe('getMediaBaseUrl', () => {
+    it('returns the apim production host for the production environment', () => {
+      expect(getMediaBaseUrl('production')).toBe('https://apim.ebay.com');
+    });
+
+    it('returns the apim sandbox host for the sandbox environment', () => {
+      expect(getMediaBaseUrl('sandbox')).toBe('https://apim.sandbox.ebay.com');
+    });
+
+    it('returns the explicit override when one is provided', () => {
+      expect(getMediaBaseUrl('production', 'http://localhost:8080')).toBe('http://localhost:8080');
+      expect(getMediaBaseUrl('sandbox', 'https://proxy.example.com')).toBe(
+        'https://proxy.example.com',
+      );
+    });
+
+    it('never reuses the REST, identity, or Trading hosts', () => {
+      expect(getMediaBaseUrl('production')).not.toBe(getBaseUrl('production'));
+      expect(getMediaBaseUrl('production')).not.toBe(getIdentityBaseUrl('production'));
+      expect(getMediaBaseUrl('sandbox')).not.toBe(getBaseUrl('sandbox'));
+      expect(getMediaBaseUrl('sandbox')).not.toBe(getIdentityBaseUrl('sandbox'));
     });
   });
 

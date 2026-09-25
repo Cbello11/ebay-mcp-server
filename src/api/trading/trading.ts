@@ -1,7 +1,10 @@
 import type { TradingApiClient } from '@/api/clientTrading.js';
+import { readFile, stat } from 'node:fs/promises';
+import { ImageFetchError, fetchRemoteImage } from '@/utils/imageFetch.js';
+import { basename, extname, isAbsolute, resolve } from 'node:path';
 import {
   type EbayApiError,
-  type EndpointInputError,
+  EndpointInputError,
   optionalPositiveNumberEffect,
   optionalStringEffect,
   requireObjectEffect,
@@ -38,6 +41,171 @@ type RelistItemInput = InferEffectSchema<typeof relistItemSchema>;
 type UploadPictureInput = InferEffectSchema<typeof uploadPictureSchema>;
 /** Input accepted by getStoreCategories. */
 type GetStoreCategoriesInput = InferEffectSchema<typeof getStoreCategoriesSchema>;
+
+/** Largest image accepted by the Media API upload path (12 MiB). */
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+
+/** Content types inferred from a file extension when the caller omits one. */
+const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Check that a file's magic bytes match the content type it claims, so a
+ * mislabelled or non-image file is rejected before it reaches eBay.
+ */
+const hasImageSignature = (buffer: Buffer, contentType: string): boolean => {
+  if (contentType === 'image/jpeg') {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (contentType === 'image/png') {
+    return (
+      buffer.length >= 8 &&
+      buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    );
+  }
+  if (contentType === 'image/gif') {
+    return (
+      buffer.length >= 6 &&
+      (buffer.subarray(0, 6).toString('ascii') === 'GIF87a' ||
+        buffer.subarray(0, 6).toString('ascii') === 'GIF89a')
+    );
+  }
+  if (contentType === 'image/webp') {
+    return (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
+  }
+  return true;
+};
+
+/** Image bytes plus the multipart metadata the Media API upload needs. */
+interface ImageSource {
+  readonly imageBuffer: Buffer;
+  readonly filename: string;
+  readonly contentType: string;
+}
+
+/** Load an image from the MCP server's own filesystem (local/stdio use). */
+const readLocalImage = ({
+  imagePath,
+  filenameInput,
+  contentTypeInput,
+}: {
+  readonly imagePath: string;
+  readonly filenameInput: string | undefined;
+  readonly contentTypeInput: string | undefined;
+}): Effect.Effect<ImageSource, EndpointInputError> =>
+  Effect.gen(function* () {
+    const resolvedPath = isAbsolute(imagePath) ? imagePath : resolve(process.cwd(), imagePath);
+
+    const fileInfo = yield* Effect.tryPromise({
+      try: () => stat(resolvedPath),
+      catch: (error) => error,
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new EndpointInputError({
+            parameter: 'imagePath',
+            message: `Unable to read image file "${resolvedPath}": ${error instanceof Error ? error.message : String(error)}`,
+          }),
+      ),
+    );
+    if (!fileInfo.isFile()) {
+      return yield* Effect.fail(
+        new EndpointInputError({
+          parameter: 'imagePath',
+          message: 'imagePath must point to a regular file',
+        }),
+      );
+    }
+    if (fileInfo.size === 0) {
+      return yield* Effect.fail(
+        new EndpointInputError({
+          parameter: 'imagePath',
+          message: 'imagePath points to an empty file',
+        }),
+      );
+    }
+    if (fileInfo.size > MAX_IMAGE_BYTES) {
+      return yield* Effect.fail(
+        new EndpointInputError({
+          parameter: 'imagePath',
+          message: `Image is ${fileInfo.size} bytes; maximum supported size is ${MAX_IMAGE_BYTES} bytes (12 MiB).`,
+        }),
+      );
+    }
+
+    const filename = filenameInput ?? basename(resolvedPath);
+    const extension = extname(filename).toLowerCase();
+    const contentType = contentTypeInput ?? MIME_BY_EXTENSION[extension];
+    if (!contentType) {
+      return yield* Effect.fail(
+        new EndpointInputError({
+          parameter: 'contentType',
+          message:
+            'Unsupported image extension. Provide contentType explicitly for this image type.',
+        }),
+      );
+    }
+
+    const imageBuffer = yield* Effect.tryPromise({
+      try: () => readFile(resolvedPath),
+      catch: (error) => error,
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new EndpointInputError({
+            parameter: 'imagePath',
+            message: `Unable to load image file: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+      ),
+    );
+
+    return { imageBuffer, filename, contentType };
+  });
+
+/**
+ * Download an image over HTTPS so hosted deployments work without a shared
+ * filesystem. SSRF guards, the size cap, and the timeout live in
+ * {@link fetchRemoteImage}.
+ */
+const downloadRemoteImage = ({
+  imageUrl,
+  filenameInput,
+  contentTypeInput,
+}: {
+  readonly imageUrl: string;
+  readonly filenameInput: string | undefined;
+  readonly contentTypeInput: string | undefined;
+}): Effect.Effect<ImageSource, EndpointInputError> =>
+  Effect.gen(function* () {
+    const remote = yield* Effect.tryPromise({
+      try: () => fetchRemoteImage({ url: imageUrl, maxBytes: MAX_IMAGE_BYTES }),
+      catch: (error) => error,
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new EndpointInputError({
+            parameter: 'imageUrl',
+            message:
+              error instanceof ImageFetchError
+                ? error.message
+                : `Unable to fetch imageUrl: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+      ),
+    );
+
+    const filename = filenameInput ?? remote.filename;
+    const contentType = contentTypeInput ?? remote.contentType;
+    return { imageBuffer: remote.buffer, filename, contentType };
+  });
 
 const asRecordArray = (value: unknown): Record<string, unknown>[] => {
   if (!Array.isArray(value)) {
@@ -307,21 +475,24 @@ export class TradingApi {
   };
 
   /**
-   * Uploads a picture to eBay Picture Services (EPS) and returns a permanent
+   * Uploads a picture through the Commerce Media API and returns a permanent
    * eBay-hosted image URL for use in listing PictureDetails, instead of linking
    * to a third-party image host.
    *
-   * @param input - Base64-encoded image data, filename, and optional MIME type / picture name.
-   * @returns An Effect that succeeds with the parsed UploadSiteHostedPictures response payload.
+   * The image is read from disk by the server, so raw bytes never travel
+   * through the MCP JSON channel as Base64.
+   *
+   * @param input - Local image path, plus optional filename and MIME type overrides.
+   * @returns An Effect that succeeds with the Media API response payload, including imageUrl.
    *
    * @example
    * ```ts
    * const result = await Effect.runPromise(
-   *   tradingApi.uploadPicture({ imageBase64: '...', filename: 'photo.jpg' }),
+   *   tradingApi.uploadPicture({ imagePath: '/tmp/photo.jpg' }),
    * );
    * ```
    *
-   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/UploadSiteHostedPictures.html
+   * @see https://developer.ebay.com/api-docs/commerce/media/resources/image/methods/createImageFromFile
    */
   uploadPicture = (
     input: UploadPictureInput,
@@ -330,19 +501,51 @@ export class TradingApi {
 
     return Effect.gen(function* () {
       const request = yield* requireObjectEffect<UploadPictureInput>(input, 'input');
-      const imageBase64 = yield* requireStringEffect(request.imageBase64, 'imageBase64');
-      const filename = yield* requireStringEffect(request.filename, 'filename');
-      const inputContentType = yield* optionalStringEffect(request.contentType, 'contentType');
-      const pictureName = yield* optionalStringEffect(request.pictureName, 'pictureName');
-      const contentType = inputContentType === undefined ? 'image/jpeg' : inputContentType;
-      const imageBuffer = Buffer.from(imageBase64, 'base64');
+      const imagePathInput = yield* optionalStringEffect(request.imagePath, 'imagePath');
+      const imageUrlInput = yield* optionalStringEffect(request.imageUrl, 'imageUrl');
+      const filenameInput = yield* optionalStringEffect(request.filename, 'filename');
+      const contentTypeInput = yield* optionalStringEffect(request.contentType, 'contentType');
 
-      return yield* tradingClient.executeUploadPicture({
-        imageBuffer,
-        filename,
-        contentType,
-        pictureName,
-      });
+      if (imagePathInput === undefined && imageUrlInput === undefined) {
+        return yield* Effect.fail(
+          new EndpointInputError({
+            parameter: 'imagePath',
+            message: 'Supply exactly one of imagePath or imageUrl.',
+          }),
+        );
+      }
+      if (imagePathInput !== undefined && imageUrlInput !== undefined) {
+        return yield* Effect.fail(
+          new EndpointInputError({
+            parameter: 'imagePath',
+            message: 'Supply exactly one of imagePath or imageUrl, not both.',
+          }),
+        );
+      }
+
+      const source =
+        imageUrlInput === undefined
+          ? yield* readLocalImage({
+              imagePath: imagePathInput as string,
+              filenameInput,
+              contentTypeInput,
+            })
+          : yield* downloadRemoteImage({
+              imageUrl: imageUrlInput,
+              filenameInput,
+              contentTypeInput,
+            });
+
+      if (!hasImageSignature(source.imageBuffer, source.contentType)) {
+        return yield* Effect.fail(
+          new EndpointInputError({
+            parameter: imageUrlInput === undefined ? 'imagePath' : 'imageUrl',
+            message: `File contents do not match declared image type ${source.contentType}.`,
+          }),
+        );
+      }
+
+      return yield* tradingClient.executeUploadPicture(source);
     });
   };
 

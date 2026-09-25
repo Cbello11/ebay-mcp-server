@@ -3,7 +3,7 @@ import { XMLParser } from 'fast-xml-parser';
 import type { EbayApiClient } from '@/api/client.js';
 import { TradingApiFailure } from '@/api/clientTradingError.js';
 import { EbayApiError } from '@/api/shared/request.js';
-import { getBaseUrl, getTradingSiteId } from '@/config/environment.js';
+import { getBaseUrl, getMediaBaseUrl, getTradingSiteId } from '@/config/environment.js';
 import { getErrorMessage } from '@/utils/errors.js';
 import { httpRequestEffect } from '@/utils/http.js';
 import { apiLogger } from '@/utils/logger.js';
@@ -13,6 +13,9 @@ import { Effect } from 'effect';
 const COMPAT_LEVEL = '1451';
 const TRADING_ENDPOINT_PATH = '/ws/api.dll';
 const TRADING_XMLNS = 'urn:ebay:apis:eBLBaseComponents';
+const MEDIA_IMAGE_PATH = '/commerce/media/v1_beta/image/create_image_from_file';
+const TRADING_API_LABEL = 'Trading API';
+const MEDIA_API_LABEL = 'Media API';
 
 /** Context required to report a failed Trading API call. */
 interface TradingFailureContext {
@@ -20,6 +23,8 @@ interface TradingFailureContext {
   readonly callName: string;
   /** Absolute Trading API request URL. */
   readonly path: string;
+  /** API family reported in failure messages. Defaults to the Trading API. */
+  readonly apiLabel?: string;
 }
 
 /** Values required to create an authorized Trading API header set. */
@@ -47,6 +52,7 @@ interface TradingParseContext extends TradingFailureContext {
 }
 
 const buildTradingPath = (baseUrl: string): string => `${baseUrl}${TRADING_ENDPOINT_PATH}`;
+const buildMediaPath = (baseUrl: string): string => `${baseUrl}${MEDIA_IMAGE_PATH}`;
 
 const buildTradingHeaders = (callName: string): Record<string, string> => ({
   'X-EBAY-API-SITEID': getTradingSiteId(),
@@ -71,7 +77,7 @@ const buildTradingXmlBody = (
 };
 
 const createTradingApiError = (
-  { callName, path }: TradingFailureContext,
+  { callName, path, apiLabel }: TradingFailureContext,
   message: string,
   cause?: unknown,
 ): EbayApiError =>
@@ -81,7 +87,7 @@ const createTradingApiError = (
     cause: new TradingApiFailure({
       callName,
       path,
-      message: `Trading API ${callName} ${message}`,
+      message: `${apiLabel ?? TRADING_API_LABEL} ${callName} ${message}`,
       ...(cause === undefined ? {} : { cause }),
     }),
   });
@@ -107,6 +113,34 @@ const authorizeTradingHeaders = ({
         ),
       ),
       Effect.map((token) => ({ ...headers, 'X-EBAY-API-IAF-TOKEN': token })),
+    );
+};
+
+/**
+ * Build authorized headers for the Commerce Media API, which expects a
+ * standard OAuth bearer token rather than the Trading API's IAF token header.
+ */
+const authorizeMediaHeaders = ({
+  restClient,
+  headers,
+  callName,
+  path,
+}: TradingAuthContext): Effect.Effect<Record<string, string>, EbayApiError> => {
+  if (restClient.getConfig().disableAuthHeader) {
+    return Effect.succeed(headers);
+  }
+
+  return restClient
+    .getOAuthClient()
+    .getAccessToken()
+    .pipe(
+      Effect.mapError((error) =>
+        createTradingApiError(
+          { callName, path, apiLabel: MEDIA_API_LABEL },
+          `token acquisition failed: ${getErrorMessage(error)}`,
+        ),
+      ),
+      Effect.map((token) => ({ ...headers, Authorization: `Bearer ${token}` })),
     );
 };
 
@@ -228,6 +262,7 @@ const validateTradingAck = (
 export class TradingApiClient {
   private readonly restClient: EbayApiClient;
   private readonly baseUrl: string;
+  private readonly mediaBaseUrl: string;
   private readonly parser: XMLParser;
   private readonly builder: XmlBuilderInstance;
 
@@ -235,6 +270,7 @@ export class TradingApiClient {
     this.restClient = restClient;
     const config = restClient.getConfig();
     this.baseUrl = getBaseUrl(config.environment, config.apiBaseUrl);
+    this.mediaBaseUrl = getMediaBaseUrl(config.environment, config.apiBaseUrl);
 
     this.parser = new XMLParser({
       ignoreAttributes: false,
@@ -276,6 +312,8 @@ export class TradingApiClient {
    * ```
    */
   getTradingBaseUrl = (): string => this.baseUrl;
+
+  getMediaBaseUrl = (): string => this.mediaBaseUrl;
 
   /**
    * Execute a named Trading API call with XML request/response conversion.
@@ -330,84 +368,73 @@ export class TradingApiClient {
   };
 
   /**
-   * Execute UploadSiteHostedPictures with a binary image, uploading it to eBay
-   * Picture Services (EPS) as a multipart/form-data request and returning a
-   * permanent https://i.ebayimg.com URL for use in listing PictureDetails.
+   * Upload an image through the Commerce Media API (createImageFromFile) as a
+   * multipart/form-data request, returning a permanent eBay-hosted image URL
+   * for use in listing PictureDetails.
    *
-   * Unlike every other Trading call here, this one needs a raw multipart body
-   * (XML part + binary image part) instead of a plain `text/xml` request, so it
-   * cannot go through {@link execute}.
+   * This call targets the Media API host (apim.*), not the regular Trading or
+   * REST host, and authorizes with a bearer token rather than the Trading
+   * API's IAF token header.
    *
-   * @param input - Image bytes, filename, content type, and optional picture name.
-   * @returns An Effect that succeeds with the parsed response payload.
+   * @param input - Image bytes, filename, and content type.
+   * @returns An Effect that succeeds with the Media API payload, including imageUrl.
    *
-   * @see https://developer.ebay.com/devzone/xml/docs/reference/ebay/UploadSiteHostedPictures.html
+   * @see https://developer.ebay.com/api-docs/commerce/media/resources/image/methods/createImageFromFile
    */
   executeUploadPicture = ({
     imageBuffer,
     filename,
     contentType,
-    pictureName,
   }: {
     readonly imageBuffer: Buffer;
     readonly filename: string;
     readonly contentType: string;
-    readonly pictureName: string | undefined;
   }): Effect.Effect<Record<string, unknown>, EbayApiError> => {
-    const tradingClient = this;
-    const callName = 'UploadSiteHostedPictures';
-    const requestTag = `${callName}Request`;
-    const responseTag = `${callName}Response`;
-    const path = buildTradingPath(tradingClient.baseUrl);
-    const boundary = `EbayMcpBoundary${Date.now()}${Math.random().toString(16).slice(2)}`;
-    const xmlBody = buildTradingXmlBody(
-      tradingClient.builder,
-      requestTag,
-      pictureName === undefined ? {} : { PictureName: pictureName },
-    );
-    const preamble =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="XML Payload"\r\n` +
-      `Content-Type: text/xml;charset=utf-8\r\n\r\n` +
-      `${xmlBody}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="dummy"; filename="${filename}"\r\n` +
-      `Content-Type: ${contentType}\r\n\r\n`;
-    const epilogue = `\r\n--${boundary}--\r\n`;
-    const multipartBody = Buffer.concat([
-      Buffer.from(preamble, 'utf-8'),
-      imageBuffer,
-      Buffer.from(epilogue, 'utf-8'),
-    ]);
-    const headers = {
-      ...buildTradingHeaders(callName),
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    const callName = 'createImageFromFile';
+    const path = buildMediaPath(this.mediaBaseUrl);
+    const failureContext: TradingFailureContext = {
+      callName,
+      path,
+      apiLabel: MEDIA_API_LABEL,
     };
+    const form = new FormData();
+    const restClient = this.restClient;
+    // Convert to a fresh Uint8Array so TypeScript/Node's BlobPart types remain compatible across Node 20/25 typings.
+    form.append('image', new Blob([Uint8Array.from(imageBuffer)], { type: contentType }), filename);
 
-    apiLogger.debug(`Trading API ${callName}`, { filename, contentType, pictureName });
+    apiLogger.debug(`Media API ${callName}`, {
+      filename,
+      contentType,
+      sizeBytes: imageBuffer.byteLength,
+    });
 
     return Effect.gen(function* () {
-      const authorizedHeaders = yield* authorizeTradingHeaders({
-        restClient: tradingClient.restClient,
+      const headers = yield* authorizeMediaHeaders({ restClient, headers: {}, callName, path });
+      const response = yield* httpRequestEffect<Record<string, unknown>>({
+        method: 'POST',
+        url: path,
         headers,
-        callName,
-        path,
-      });
-      const response = yield* postTradingXml({
-        path,
-        headers: authorizedHeaders,
-        xmlBody: multipartBody,
-        callName,
-      });
-      const parsed = yield* parseTradingXml({
-        parser: tradingClient.parser,
-        responseText: response.data,
-        callName,
-        path,
-      });
-      const result = yield* readTradingPayload(parsed, responseTag, { callName, path });
+        body: form,
+        timeoutMs: 90_000,
+        responseType: 'json',
+      }).pipe(
+        Effect.mapError((error) =>
+          createTradingApiError(failureContext, `request failed: ${getErrorMessage(error)}`),
+        ),
+      );
 
-      return yield* validateTradingAck(result, { callName, path });
+      if (!isRecord(response.data)) {
+        return yield* Effect.fail(
+          createTradingApiError(failureContext, 'response must be an object'),
+        );
+      }
+      const imageUrl = response.data.imageUrl;
+      if (typeof imageUrl !== 'string' || imageUrl.length === 0) {
+        return yield* Effect.fail(
+          createTradingApiError(failureContext, 'response did not contain imageUrl', response.data),
+        );
+      }
+      return response.data;
     });
   };
 }

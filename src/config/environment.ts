@@ -410,6 +410,28 @@ export const getIdentityBaseUrl = (
   return environment === 'production' ? 'https://apiz.ebay.com' : 'https://apiz.sandbox.ebay.com';
 };
 
+/**
+ * Get base URL for the Commerce Media API (uses the apim subdomain).
+ *
+ * The Media API is not served from the regular `api.ebay.com` host; requests
+ * sent there fail with HTTP 503.
+ *
+ * @param environment eBay environment used when no override is configured.
+ * @param overrideBaseUrl Base URL override from `EBAY_MCP_API_BASE_URL`.
+ * @returns Media API base URL for direct eBay or proxy traffic.
+ * @example
+ * ```ts
+ * const mediaBaseUrl = getMediaBaseUrl('production');
+ * ```
+ * @see https://developer.ebay.com/api-docs/commerce/media/resources/image/methods/createImageFromFile
+ */
+export const getMediaBaseUrl = (environment: EbayEnvironment, overrideBaseUrl?: string): string => {
+  if (overrideBaseUrl) {
+    return overrideBaseUrl;
+  }
+  return environment === 'production' ? 'https://apim.ebay.com' : 'https://apim.sandbox.ebay.com';
+};
+
 /** Hosts treated as loopback when deciding whether a cleartext base URL is safe. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 

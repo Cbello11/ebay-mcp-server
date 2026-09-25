@@ -41,7 +41,8 @@ export interface HttpRequestOptions {
   headers?: Record<string, string>;
   /**
    * Request body. An object is JSON-stringified (with a JSON content-type when
-   * none is set); a `URLSearchParams` is form-encoded; strings/`Buffer` are sent
+   * none is set); a `URLSearchParams` is form-encoded; `FormData`/`Blob` are sent
+   * as-is so fetch generates the multipart boundary; strings/`Buffer` are sent
    * as-is. `undefined` sends no body.
    */
   body?: unknown;
@@ -200,6 +201,15 @@ interface PreparedBody {
 const prepareBody = (body: unknown): PreparedBody => {
   if (body == null) {
     return { body: undefined };
+  }
+  // Pass FormData/Blob straight through and deliberately infer no content-type:
+  // fetch/undici must generate the multipart boundary itself, and setting the
+  // header here would produce a boundary-less content-type the server rejects.
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    return { body };
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    return { body };
   }
   if (typeof body === 'string') {
     return { body };

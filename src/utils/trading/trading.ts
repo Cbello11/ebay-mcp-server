@@ -42,13 +42,26 @@ export const relistItemSchema = z.object({
 
 /** Input accepted by uploadPicture. */
 export const uploadPictureSchema = z.object({
-  imageBase64: z.string().describe('Base64-encoded image file data (no data: URL prefix)'),
-  filename: z.string().describe('File name with extension, e.g. photo.jpg'),
-  contentType: z.string().optional().describe('Image MIME type, defaulting to image/jpeg'),
-  pictureName: z
+  imagePath: z
     .string()
     .optional()
-    .describe('Optional label for the picture in eBay Picture Manager'),
+    .describe(
+      'Absolute or relative path to an image file on the MCP server host. Only usable when the server shares a filesystem with you (local stdio). Supply exactly one of imagePath or imageUrl. Never send image data or Base64 through MCP.',
+    ),
+  imageUrl: z
+    .string()
+    .optional()
+    .describe(
+      'Public HTTPS URL of the image. The server downloads it directly, so this is the option that works against a remote/hosted MCP server. Supply exactly one of imagePath or imageUrl.',
+    ),
+  filename: z
+    .string()
+    .optional()
+    .describe('Optional file name override. Defaults to the image file name.'),
+  contentType: z
+    .string()
+    .optional()
+    .describe('Optional image MIME type. Defaults from the file extension.'),
 });
 
 /** Input accepted by getStoreCategories. */
