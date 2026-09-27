@@ -10,9 +10,11 @@ import {
   registerMetaTools,
   toolNamesInFamilies,
 } from '@/mcp/toolGating.js';
+import { type McpRequestContext, runWithMcpRequestContext } from '@/mcp/requestContext.js';
 import { buildUiToolResult, createUiBridge, type UiBridge } from '@/mcp/uiBridge.js';
 import { getToolEntries, type ToolEntry } from '@/tools/registry.js';
 import { getEbayErrorDetails } from '@/utils/errors.js';
+import { isRecord } from '@/utils/typeGuards.js';
 import { serverLogger, toolLogger } from '@/utils/logger.js';
 import { Effect } from 'effect';
 
@@ -78,6 +80,31 @@ function formatToolFailure(error: unknown) {
   };
 }
 
+/**
+ * Pull the calling identity out of the MCP SDK's per-request `extra`.
+ *
+ * Typed as `unknown` rather than the SDK's `RequestHandlerExtra` so this stays
+ * decoupled from SDK-internal types; the two fields read here are stable.
+ */
+function readRequestContext(extra: unknown): McpRequestContext {
+  if (!isRecord(extra)) {
+    return {};
+  }
+
+  const authInfo = isRecord(extra.authInfo) ? extra.authInfo : undefined;
+  const subject =
+    typeof authInfo?.subject === 'string'
+      ? authInfo.subject
+      : typeof authInfo?.clientId === 'string'
+        ? authInfo.clientId
+        : undefined;
+
+  return {
+    subject,
+    sessionId: typeof extra.sessionId === 'string' ? extra.sessionId : undefined,
+  };
+}
+
 function registerTool(
   server: McpServer,
   api: EbaySellerApi,
@@ -95,34 +122,39 @@ function registerTool(
       description: definition.description,
       inputSchema: definition.inputSchema,
     },
-    async (args: ToolArgs) => {
+    async (args: ToolArgs, extra: unknown) => {
       if (logToolExecution) {
         toolLogger.debug(`Executing tool: ${definition.name}`, { args });
       }
 
-      return await Effect.runPromise(
-        Effect.tryPromise({
-          try: () => Promise.resolve(handler(api, args)),
-          catch: (error) => error,
-        }).pipe(
-          Effect.map((result) => {
-            if (logToolExecution) {
-              toolLogger.debug(`Tool ${definition.name} completed successfully`);
-            }
+      // The identity is bound for the whole invocation so handlers that need it
+      // (currently only the image-upload bridge) can read it without every tool
+      // signature growing a parameter it would ignore.
+      return await runWithMcpRequestContext(readRequestContext(extra), async () =>
+        Effect.runPromise(
+          Effect.tryPromise({
+            try: () => Promise.resolve(handler(api, args)),
+            catch: (error) => error,
+          }).pipe(
+            Effect.map((result) => {
+              if (logToolExecution) {
+                toolLogger.debug(`Tool ${definition.name} completed successfully`);
+              }
 
-            return ui.shouldRender(entry)
-              ? buildUiToolResult(entry.ui, result)
-              : formatToolSuccess(result);
-          }),
-          Effect.catchAll((error) => {
-            if (logToolExecution) {
-              toolLogger.error(`Tool ${definition.name} failed`, {
-                error: getEbayErrorDetails(error).message,
-              });
-            }
+              return ui.shouldRender(entry)
+                ? buildUiToolResult(entry.ui, result)
+                : formatToolSuccess(result);
+            }),
+            Effect.catchAll((error) => {
+              if (logToolExecution) {
+                toolLogger.error(`Tool ${definition.name} failed`, {
+                  error: getEbayErrorDetails(error).message,
+                });
+              }
 
-            return Effect.succeed(formatToolFailure(error));
-          }),
+              return Effect.succeed(formatToolFailure(error));
+            }),
+          ),
         ),
       );
     },

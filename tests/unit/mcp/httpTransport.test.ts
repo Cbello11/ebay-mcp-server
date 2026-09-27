@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   createHttpMcpApp,
   createHttpTransportConfigFromEnv,
@@ -7,6 +7,7 @@ import {
   getHttpServerUrl,
   type HttpTransportConfig,
 } from '@/mcp/httpTransport.js';
+import { uploadHandleStore } from '@/mcp/uploadHandles.js';
 import process from 'node:process';
 
 const UNKNOWN_SESSION_ID = '00000000-0000-0000-0000-000000000000';
@@ -237,5 +238,91 @@ describe('HTTP MCP transport', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ status: 'healthy' });
+  });
+});
+
+describe('browser upload routes on the HTTP transport', () => {
+  const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+
+  afterEach(() => {
+    uploadHandleStore.clear();
+    uploadHandleStore.configure(undefined);
+  });
+
+  it('reads the public upload origin from MCP_PUBLIC_URL', () => {
+    const config = createHttpTransportConfigFromEnv({
+      MCP_PUBLIC_URL: 'https://ebay-mcp.example.test',
+    });
+
+    expect(config.publicUrl).toBe('https://ebay-mcp.example.test');
+  });
+
+  it('mints upload URLs against the public origin, not the bind address', async () => {
+    await createHttpMcpApp(
+      createTestConfig({ publicUrl: 'https://ebay-mcp.example.test', port: 8099 }),
+    );
+
+    const minted = uploadHandleStore.mint('user-a');
+    expect(minted.ok).toBe(true);
+    if (!minted.ok) {
+      return;
+    }
+    expect(minted.value.uploadUrl).toBe(
+      `https://ebay-mcp.example.test/upload/${minted.value.uploadHandle}`,
+    );
+  });
+
+  it('falls back to the bind URL when no public origin is configured', async () => {
+    await createHttpMcpApp(createTestConfig());
+
+    const minted = uploadHandleStore.mint('user-a');
+    expect(minted.ok && minted.value.uploadUrl.startsWith('http://127.0.0.1:3000/upload/')).toBe(
+      true,
+    );
+  });
+
+  it('keeps the upload endpoint reachable without a bearer token while MCP stays protected', async () => {
+    const app = await createHttpMcpApp(createTestConfig({ staticAuthToken: 'deploy-secret' }));
+
+    const minted = uploadHandleStore.mint('user-a');
+    if (!minted.ok) {
+      throw new Error('mint failed');
+    }
+    const { uploadHandle } = minted.value;
+
+    // The phone browser has no MCP credentials; the handle is the capability.
+    const page = await request(app).get(`/upload/${uploadHandle}`);
+    expect(page.status).toBe(200);
+
+    const upload = await request(app)
+      .post(`/upload/${uploadHandle}`)
+      .set('Content-Type', 'image/jpeg')
+      .send(JPEG_MAGIC);
+    expect(upload.status).toBe(201);
+
+    // The MCP route itself is still closed to the same unauthenticated caller.
+    const mcp = await request(app).post('/').send(INITIALIZE_BODY);
+    expect(mcp.status).toBe(401);
+  });
+
+  it('does not let an unauthenticated uploader redeem the image', async () => {
+    const app = await createHttpMcpApp(createTestConfig({ staticAuthToken: 'deploy-secret' }));
+    const minted = uploadHandleStore.mint('user-a');
+    if (!minted.ok) {
+      throw new Error('mint failed');
+    }
+
+    await request(app)
+      .post(`/upload/${minted.value.uploadHandle}`)
+      .set('Content-Type', 'image/jpeg')
+      .send(JPEG_MAGIC);
+
+    // Redemption is owner-bound, so possession of the URL is not enough.
+    const stolen = uploadHandleStore.consume(minted.value.uploadHandle, 'user-b');
+    expect(stolen.ok).toBe(false);
+    if (stolen.ok) {
+      return;
+    }
+    expect(stolen.reason).toBe('forbidden');
   });
 });

@@ -12,6 +12,8 @@ import { createMetadataRouter, getProtectedResourceMetadataUrl } from '@/auth/oa
 import { TokenVerifier } from '@/auth/tokenVerifier.js';
 import { getDefaultScopes, getEbayConfig } from '@/config/environment.js';
 import { createEbayMcpRuntime } from '@/mcp/runtime.js';
+import { uploadHandleStore } from '@/mcp/uploadHandles.js';
+import { createUploadRouter } from '@/mcp/uploadRoute.js';
 import type { EbayConfig } from '@/types/ebay.js';
 import { getErrorMessage } from '@/utils/errors.js';
 import { serverLogger } from '@/utils/logger.js';
@@ -48,6 +50,12 @@ export interface HttpTransportConfig {
   oauth: HttpOAuthConfig;
   /** TCP port for the Express server URL. */
   port: number;
+  /**
+   * Publicly reachable origin of this server, used to build browser upload URLs.
+   * Needed because behind a proxy (Railway, a custom domain) the bind address is
+   * not the address a phone can open. Falls back to the bind URL when unset.
+   */
+  publicUrl?: string;
   /** Repo root used to serve static icon assets. */
   projectRoot: string;
   /**
@@ -89,6 +97,7 @@ export const createHttpTransportConfigFromEnv = (env: NodeJS.ProcessEnv): HttpTr
     useIntrospection: env.OAUTH_USE_INTROSPECTION !== 'false',
   },
   authEnabled: env.OAUTH_ENABLED !== 'false',
+  publicUrl: env.MCP_PUBLIC_URL,
   projectRoot: getProjectRoot(),
   staticAuthToken: env.MCP_AUTH_TOKEN,
 });
@@ -311,6 +320,13 @@ export const createHttpMcpApp = async (
       oauth_enabled: config.authEnabled,
     });
   });
+
+  // Browser image uploads. Mounted ahead of the MCP bearer middleware because
+  // the uploader is a phone browser with no OAuth token: the 256-bit single-use
+  // handle in the URL is the capability, and the handle's owner is re-checked
+  // against the authenticated MCP user when the bytes are redeemed.
+  uploadHandleStore.configure(config.publicUrl ?? serverUrl);
+  app.use(createUploadRouter(uploadHandleStore));
 
   const authMiddleware = await createAuthMiddleware(config, serverUrl);
   const transports = new Map<string, StreamableHTTPServerTransport>();

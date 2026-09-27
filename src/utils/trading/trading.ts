@@ -46,13 +46,19 @@ export const uploadPictureSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Absolute or relative path to an image file on the MCP server host. Only usable when the server shares a filesystem with you (local stdio). Supply exactly one of imagePath or imageUrl. Never send image data or Base64 through MCP.',
+      'Absolute or relative path to an image file on the MCP server host. Only usable when the server shares a filesystem with you (local stdio). Supply at most one of imagePath, imageUrl, or uploadHandle. Never send image data or Base64 through MCP.',
     ),
   imageUrl: z
     .string()
     .optional()
     .describe(
-      'Public HTTPS URL of the image. The server downloads it directly, so this is the option that works against a remote/hosted MCP server. Supply exactly one of imagePath or imageUrl.',
+      'Public HTTPS URL of an already-hosted image. The server downloads it directly. Supply at most one of imagePath, imageUrl, or uploadHandle.',
+    ),
+  uploadHandle: z
+    .string()
+    .optional()
+    .describe(
+      'Handle returned by a previous call made with no image argument, after the user has opened the upload URL and chosen their photo. Redeems the uploaded bytes. Single-use and expires ten minutes after it was issued.',
     ),
   filename: z
     .string()

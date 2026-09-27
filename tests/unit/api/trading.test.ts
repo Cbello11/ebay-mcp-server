@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TradingApiClient } from '@/api/clientTrading.js';
 import { TradingApi } from '@/api/trading/trading.js';
+import { runWithMcpRequestContext } from '@/mcp/requestContext.js';
+import { uploadHandleStore } from '@/mcp/uploadHandles.js';
 import { Effect } from 'effect';
 
 let api: TradingApi;
@@ -304,11 +306,7 @@ describe('uploadPicture (Commerce Media API path)', () => {
     expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
   });
 
-  it('requires exactly one of imagePath or imageUrl', async () => {
-    const neither = await Effect.runPromise(Effect.flip(uploadApi.uploadPicture({} as never)));
-    expect(neither._tag).toBe('EndpointInputError');
-    expect((neither as { message: string }).message).toContain('exactly one');
-
+  it('accepts at most one image source', async () => {
     const imagePath = await writeImage('photo.jpg');
     const both = await Effect.runPromise(
       Effect.flip(
@@ -316,8 +314,22 @@ describe('uploadPicture (Commerce Media API path)', () => {
       ),
     );
     expect(both._tag).toBe('EndpointInputError');
-    expect((both as { message: string }).message).toContain('not both');
+    expect((both as { message: string }).message).toContain('at most one');
 
+    const withHandle = await Effect.runPromise(
+      Effect.flip(uploadApi.uploadPicture({ imagePath, uploadHandle: 'h'.repeat(43) } as never)),
+    );
+    expect(withHandle._tag).toBe('EndpointInputError');
+
+    expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
+  });
+
+  it('points at the local options when asked to mint with no HTTP address available', async () => {
+    // The shared store is unconfigured here, which is exactly the stdio case.
+    const error = await Effect.runPromise(Effect.flip(uploadApi.uploadPicture({} as never)));
+
+    expect(error._tag).toBe('EndpointInputError');
+    expect((error as { message: string }).message).toContain('imagePath');
     expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
   });
 
@@ -414,5 +426,173 @@ describe('uploadPicture (Commerce Media API path)', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('Media API createImageFromFile');
+  });
+});
+
+describe('uploadPicture (browser upload-handle bridge)', () => {
+  const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  let uploadClient: {
+    execute: ReturnType<typeof vi.fn>;
+    executeUploadPicture: ReturnType<typeof vi.fn>;
+  };
+  let uploadApi: TradingApi;
+
+  beforeEach(() => {
+    uploadHandleStore.clear();
+    uploadHandleStore.configure('https://mcp.example.test');
+    uploadClient = {
+      execute: vi.fn(),
+      executeUploadPicture: vi
+        .fn()
+        .mockReturnValue(
+          Effect.succeed({ imageUrl: 'https://i.ebayimg.com/images/g/x/s-l1600.jpg' }),
+        ),
+    };
+    uploadApi = new TradingApi(uploadClient as unknown as TradingApiClient);
+  });
+
+  afterEach(() => {
+    uploadHandleStore.clear();
+    // Restore the stdio-shaped default so other suites are unaffected.
+    uploadHandleStore.configure(undefined);
+  });
+
+  /** Mint through the tool exactly as an agent would, as a given MCP user. */
+  const mintAs = async (subject: string | undefined) => {
+    const result = await runWithMcpRequestContext({ subject }, () =>
+      Effect.runPromise(uploadApi.uploadPicture({} as never)),
+    );
+    return result as { status: string; uploadHandle: string; uploadUrl: string; expiresAt: string };
+  };
+
+  it('mints an upload URL when given no image argument', async () => {
+    const minted = await mintAs('user-a');
+
+    expect(minted.status).toBe('awaiting_upload');
+    expect(minted.uploadUrl).toBe(`https://mcp.example.test/upload/${minted.uploadHandle}`);
+    expect(Date.parse(minted.expiresAt)).toBeGreaterThan(Date.now());
+    // Minting must not touch eBay.
+    expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
+  });
+
+  it('redeems an uploaded handle through the same Media API call as the other paths', async () => {
+    const minted = await mintAs('user-a');
+    uploadHandleStore.attach(minted.uploadHandle, {
+      imageBuffer: JPEG_MAGIC,
+      filename: 'phone.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    const result = await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+    );
+
+    expect(result.imageUrl).toBe('https://i.ebayimg.com/images/g/x/s-l1600.jpg');
+    expect(uploadClient.executeUploadPicture).toHaveBeenCalledTimes(1);
+    const call = uploadClient.executeUploadPicture.mock.calls[0][0];
+    expect(call.filename).toBe('phone.jpg');
+    expect(call.contentType).toBe('image/jpeg');
+    expect(Buffer.from(call.imageBuffer).equals(JPEG_MAGIC)).toBe(true);
+  });
+
+  it('honours filename and contentType overrides when redeeming', async () => {
+    const minted = await mintAs('user-a');
+    uploadHandleStore.attach(minted.uploadHandle, {
+      imageBuffer: JPEG_MAGIC,
+      filename: 'phone.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(
+        uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle, filename: 'front-view.jpg' }),
+      ),
+    );
+
+    expect(uploadClient.executeUploadPicture.mock.calls[0][0].filename).toBe('front-view.jpg');
+  });
+
+  it('refuses to redeem the same handle twice', async () => {
+    const minted = await mintAs('user-a');
+    uploadHandleStore.attach(minted.uploadHandle, {
+      imageBuffer: JPEG_MAGIC,
+      filename: 'phone.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+    );
+
+    const replay = await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(
+        Effect.flip(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+      ),
+    );
+
+    expect(replay._tag).toBe('EndpointInputError');
+    expect(uploadClient.executeUploadPicture).toHaveBeenCalledTimes(1);
+  });
+
+  it('will not let a different MCP user redeem a handle', async () => {
+    const minted = await mintAs('user-a');
+    uploadHandleStore.attach(minted.uploadHandle, {
+      imageBuffer: JPEG_MAGIC,
+      filename: 'phone.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    const stolen = await runWithMcpRequestContext({ subject: 'user-b' }, () =>
+      Effect.runPromise(
+        Effect.flip(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+      ),
+    );
+
+    expect(stolen._tag).toBe('EndpointInputError');
+    expect((stolen as { message: string }).message).toContain('different user');
+    expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
+
+    // Still redeemable by the user it was minted for.
+    const owner = await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+    );
+    expect(owner.imageUrl).toBe('https://i.ebayimg.com/images/g/x/s-l1600.jpg');
+  });
+
+  it('rejects an unknown handle without calling eBay', async () => {
+    const error = await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(Effect.flip(uploadApi.uploadPicture({ uploadHandle: 'z'.repeat(43) }))),
+    );
+
+    expect(error._tag).toBe('EndpointInputError');
+    expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
+  });
+
+  it('tells the caller when the photo has not been uploaded yet', async () => {
+    const minted = await mintAs('user-a');
+
+    const pending = await runWithMcpRequestContext({ subject: 'user-a' }, () =>
+      Effect.runPromise(
+        Effect.flip(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+      ),
+    );
+
+    expect((pending as { message: string }).message).toContain('No image has been uploaded');
+    expect(uploadClient.executeUploadPicture).not.toHaveBeenCalled();
+  });
+
+  it('keeps unauthenticated callers on a single shared principal', async () => {
+    const minted = await mintAs(undefined);
+    uploadHandleStore.attach(minted.uploadHandle, {
+      imageBuffer: JPEG_MAGIC,
+      filename: 'phone.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    const result = await runWithMcpRequestContext({ subject: undefined }, () =>
+      Effect.runPromise(uploadApi.uploadPicture({ uploadHandle: minted.uploadHandle })),
+    );
+
+    expect(result.imageUrl).toBe('https://i.ebayimg.com/images/g/x/s-l1600.jpg');
   });
 });
