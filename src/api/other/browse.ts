@@ -276,7 +276,11 @@ export class BrowseApi {
         sort: { wireName: 'sort', value: sort },
       });
 
-      const raw = yield* requestGetEffect<unknown>(client, `${basePath}/item_summary/search`, params);
+      const raw = yield* requestGetEffect<unknown>(
+        client,
+        `${basePath}/item_summary/search`,
+        params,
+      );
       const rawItems = isRecord(raw) && Array.isArray(raw.itemSummaries) ? raw.itemSummaries : [];
 
       const items: BrowseItem[] = [];
